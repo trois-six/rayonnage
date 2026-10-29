@@ -586,7 +586,7 @@ impl Profile {
         }
         if !self.use_folder && !self.use_file_name {
             e.push(
-                t!("Enable folder or file organization so that the script does something.")
+                t!("Enable folder or file organization, otherwise nothing would be done.")
                     .into(),
             );
         }
@@ -749,7 +749,7 @@ pub struct RunResult {
 }
 
 pub fn report_text(result: &RunResult) -> String {
-    let mut s = t!("Library Organizer Report:\n\n{0}", result.summary);
+    let mut s = t!("Organization Report:\n\n{0}", result.summary);
     for e in &result.log {
         s.push_str("\n\n");
         s.push_str(&t!("{0}:\n{1}: {2}", e.profile, e.action, e.path));

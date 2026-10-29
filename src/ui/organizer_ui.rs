@@ -46,8 +46,8 @@ pub fn quick(state: &State) {
         widgets::alert(
             &state.window,
             t!("Empty base folder"),
-            t!("Library Organizer will not work as expected while the base folder is empty. \
-                First configure the profile with \u{201c}Library Organizer…\u{201d}."),
+            t!("Files cannot be organized while the base folder is empty. \
+                First configure the profile with \u{201c}Organize Files…\u{201d}."),
         );
         return;
     }
@@ -70,7 +70,7 @@ pub fn quick(state: &State) {
 pub fn undo(state: &State) {
     let path = Settings::undo_path();
     if !path.exists() {
-        widgets::alert(&state.window, "Library Organizer", t!("Nothing to undo."));
+        widgets::alert(&state.window, t!("Organize Files"), t!("Nothing to undo."));
         return;
     }
     let st = state.clone();
@@ -126,7 +126,7 @@ fn launch(state: &State, books: Vec<Book>, profiles: Vec<Profile>) {
                 &undo_path,
             )
         },
-        |st, r| apply_result(st, r, "Library Organizer"),
+        |st, r| apply_result(st, r, t!("Organize Files")),
     );
 }
 
@@ -692,7 +692,7 @@ fn yes_no_placeholder(f: OrgField) -> String {
 
 impl Editor {
     fn build(state: &State, settings: OrganizerSettings, preview_book: Option<Book>) {
-        let (win, content, buttons) = widgets::dialog(&state.window, "Library Organizer", 920, 720);
+        let (win, content, buttons) = widgets::dialog(&state.window, t!("Organize Files"), 920, 720);
         let mut profiles = settings.profiles.clone();
         if profiles.is_empty() {
             profiles.push(Profile::default());
@@ -1635,7 +1635,7 @@ impl Editor {
                 widgets::alert(
                     &parent,
                     t!("Import failed"),
-                    t!("This file does not contain any Library Organizer profile."),
+                    t!("This file does not contain any organization profile."),
                 );
                 return;
             }

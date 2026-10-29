@@ -108,20 +108,23 @@ starting from a given number, and can store the total count.
     automatic contrast.
 - Custom presets can be saved.
 
-### Bedetheque Scraper 2 (Ctrl+B)
-Port of the plugin. The series, album and edition are looked up on bedetheque.com, with a choice
-dialog when the result is ambiguous.
+### Fetching book info from Bedetheque (Ctrl+B)
+Books menu → "Fetch Info from Bedetheque" (based on the Bedetheque Scrapper 2 plugin). The
+series, album and edition are looked up on bedetheque.com, with a choice dialog when the result
+is ambiguous.
 - Fetched fields: series, title, number, creators, publisher, imprint, legal deposit date, ISBN,
   format, genre, summary, rating, album count, series complete, language, web link.
-- Each field can be enabled or disabled, with the plugin's options: articles, capitalization,
-  "One Shot", delay between books, etc.
-- Extra commands: "QuickScrape" from a URL, and rescrape from the Web field.
+- Settings → Bedetheque: each field can be enabled or disabled, with options for articles,
+  capitalization, "One Shot", delay between books, etc.
+- "Fetch Info from a Bedetheque Link…" takes an album, series or magazine URL; the "rescrape"
+  option fetches again from the Web field of the books.
 - If bedetheque.com rejects direct requests (403 error, timeout), the application retries with
   `curl`, available by default on Linux, macOS and Windows 10+.
 
-### Library Organizer (Ctrl+L)
-Port of the plugin: moves, copies or simulates the filing of book files according to folder and
-file name templates.
+### Organizing files (Ctrl+L)
+Books menu → "Organize Files…" (based on the Library Organizer plugin): moves, copies or simulates
+the filing of book files according to folder and file name templates. "Organize Files Again"
+reuses the last profiles; "Undo Last Organization" puts the files back.
 - Template example: `{<publisher>}/{<series>}{ (<startyear>)}` and `{<series>}{ #<number3>}`.
 - Multiple profiles, live preview.
 - Filing options: replacement values for empty fields, illegal characters, month names, exclusions

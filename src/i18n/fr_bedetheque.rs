@@ -8,7 +8,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "Vous exécutez un rescrape : les albums sans lien web seront ignorés. Confirmer ?",
     ),
     ("Rescrape", "Rescraper"),
-    ("Configure Bedetheque Scraper 2", "Configurer Bedetheque Scraper 2"),
     (
         "Fields to retrieve (unchecked fields are never modified):",
         "Données récupérées (les champs non cochés ne sont jamais modifiés) :",
@@ -80,10 +79,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "Detailed log (requests and extracted values, shown after processing)",
         "Journal détaillé (requêtes et valeurs extraites, affiché après le traitement)",
     ),
-    (
-        "Port of Bedetheque Scraper 2 v{0} (Franck, Mizio66, kiwi13 & maforget)",
-        "Portage de Bedetheque Scraper 2 v{0} (Franck, Mizio66, kiwi13 & maforget)",
-    ),
     ("Log", "Journal"),
     ("Cancel", "Annuler"),
     ("Save", "Enregistrer"),
@@ -122,9 +117,7 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("\n\nErrors:\n", "\n\nErreurs :\n"),
     ("\n\nSkipped:\n", "\n\nIgnorés :\n"),
     ("\n\nLog:\n", "\n\nJournal :\n"),
-    ("Bedetheque Scraper 2 — report", "Bedetheque Scraper 2 — rapport"),
     // -- src/ui/scraper_ui.rs: QuickScrape -----------------------------------
-    ("QuickScrape BD2 — scrape a link directly", "QuickScrape BD2 — scraper directement un lien"),
     (
         "Paste the web link of the album (or of the series, or of the magazine) from www.bedetheque.com:",
         "Coller le lien internet de l'album (ou de la série, ou de la revue) provenant de www.bedetheque.com :",
@@ -233,4 +226,12 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Album summary unreachable: {0}", "Résumé de l'album inaccessible : {0}"),
     ("Album summary found", "Résumé de l'album trouvé"),
     ("No album summary", "Pas de résumé d'album"),
+    ("Fetching the info again from the Web links…", "Nouvelle récupération des infos depuis les liens web…"),
+    ("Fetching the info from Bedetheque…", "Récupération des infos sur Bedetheque…"),
+    ("Bedetheque — report", "Bedetheque — rapport"),
+    ("Fetching the info from Bedetheque links…", "Récupération des infos depuis les liens Bedetheque…"),
+    ("Fetch the info from a Bedetheque link", "Récupérer les infos depuis un lien Bedetheque"),
+    ("Fetch Info from Bedetheque", "Récupérer les infos sur Bedetheque"),
+    ("Fetch Info from a Bedetheque Link…", "Récupérer les infos depuis un lien Bedetheque…"),
+    ("Fetch info from Bedetheque (Ctrl+B)", "Récupérer les infos sur Bedetheque (Ctrl+B)"),
 ];

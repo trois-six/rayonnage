@@ -61,6 +61,8 @@ pub struct AppState {
     /// The user confirmed quitting while an operation was running.
     quitting: Cell<bool>,
     columns_save_pending: Cell<bool>,
+    library_dirty: Cell<bool>,
+    save_pending: Cell<bool>,
     info_panel: gtk::Box,
     info_cover: gtk::Picture,
     info_text: gtk::Label,
@@ -152,6 +154,8 @@ pub fn build_ui(app: &gtk::Application) {
         busy: Cell::new(false),
         quitting: Cell::new(false),
         columns_save_pending: Cell::new(false),
+        library_dirty: Cell::new(false),
+        save_pending: Cell::new(false),
         info_panel,
         info_cover,
         info_text,
@@ -213,7 +217,7 @@ pub fn build_ui(app: &gtk::Application) {
                 s.window_height = w.default_height();
             }
             let _ = state.settings.borrow().save();
-            state.save_library();
+            state.flush_library();
             glib::Propagation::Proceed
         }
     ));
@@ -381,12 +385,12 @@ fn build_layout(state: &State) -> gtk::Box {
         .build();
     let scrape_btn = gtk::Button::builder()
         .child(&icons::icon(icons::Icon::Scraper))
-        .tooltip_text("Bedetheque Scraper 2")
+        .tooltip_text(t!("Fetch info from Bedetheque (Ctrl+B)"))
         .action_name("win.bd-scrape")
         .build();
     let organize_btn = gtk::Button::builder()
         .child(&icons::icon(icons::Icon::Organizer))
-        .tooltip_text("Library Organizer")
+        .tooltip_text(t!("Organize files (Ctrl+L)"))
         .action_name("win.organize")
         .build();
     header.pack_start(&scan_btn);
@@ -567,18 +571,20 @@ fn books_section() -> gio::Menu {
     m
 }
 
-fn plugins_section() -> gio::Menu {
+/// Fetching the book info from bedetheque.com.
+fn bedetheque_section() -> gio::Menu {
     let m = gio::Menu::new();
-    let bd = gio::Menu::new();
-    bd.append(Some("Bedetheque Scraper 2"), Some("win.bd-scrape"));
-    bd.append(Some("QuickScrape BD2 (URL)…"), Some("win.bd-quick"));
-    bd.append(Some(t!("Configure BD2…")), Some("win.bd-config"));
-    m.append_submenu(Some("Bedetheque Scraper 2"), &bd);
-    let lo = gio::Menu::new();
-    lo.append(Some("Library Organizer…"), Some("win.organize"));
-    lo.append(Some(t!("Library Organizer (quick)")), Some("win.organize-quick"));
-    lo.append(Some(t!("Undo Last Move")), Some("win.organize-undo"));
-    m.append_submenu(Some("Library Organizer"), &lo);
+    m.append(Some(t!("Fetch Info from Bedetheque")), Some("win.bd-scrape"));
+    m.append(Some(t!("Fetch Info from a Bedetheque Link…")), Some("win.bd-quick"));
+    m
+}
+
+/// Moving / renaming the book files according to templates.
+fn organize_section() -> gio::Menu {
+    let m = gio::Menu::new();
+    m.append(Some(t!("Organize Files…")), Some("win.organize"));
+    m.append(Some(t!("Organize Files Again")), Some("win.organize-quick"));
+    m.append(Some(t!("Undo Last Organization")), Some("win.organize-undo"));
     m
 }
 
@@ -594,7 +600,8 @@ fn context_menu() -> gio::Menu {
     let m = gio::Menu::new();
     m.append_section(None, &books_section());
     m.append_submenu(Some(t!("Convert")), &convert_menu());
-    m.append_section(None, &plugins_section());
+    m.append_section(None, &bedetheque_section());
+    m.append_section(None, &organize_section());
     m.append_section(None, &file_section());
     m
 }
@@ -610,7 +617,8 @@ fn main_menu() -> gio::Menu {
     m.append_section(None, &lib);
     m.append_section(None, &books_section());
     m.append_submenu(Some(t!("Convert")), &convert_menu());
-    m.append_section(None, &plugins_section());
+    m.append_section(None, &bedetheque_section());
+    m.append_section(None, &organize_section());
     m.append_section(None, &file_section());
     let about = gio::Menu::new();
     about.append(Some(t!("About")), Some("win.about"));
@@ -641,7 +649,6 @@ fn build_actions(app: &gtk::Application, state: &State) {
     add("export", convert_dialog::open);
     add("bd-scrape", scraper_ui::scrape);
     add("bd-quick", scraper_ui::quick_scrape);
-    add("bd-config", scraper_ui::configure);
     add("organize", organizer_ui::open);
     add("organize-quick", organizer_ui::quick);
     add("organize-undo", organizer_ui::undo);
@@ -808,8 +815,29 @@ impl AppState {
         self.status.set_text(s);
     }
 
-    pub fn save_library(&self) {
+    /// Saves the library a moment later: successive changes (a scan, a
+    /// scraping session...) are written once.
+    pub fn save_library(self: &Rc<Self>) {
+        self.library_dirty.set(true);
+        if self.save_pending.replace(true) {
+            return;
+        }
+        let weak = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+            if let Some(st) = weak.upgrade() {
+                st.save_pending.set(false);
+                st.flush_library();
+            }
+        });
+    }
+
+    /// Writes the library now if it changed since the last save.
+    pub fn flush_library(&self) {
+        if !self.library_dirty.replace(false) {
+            return;
+        }
         if let Err(e) = self.library.borrow().save() {
+            self.journal.error(&format!("{e:#}"));
             widgets::alert(&self.window, t!("Error"), &format!("{e:#}"));
         }
     }
@@ -1370,7 +1398,7 @@ fn about(state: &State) {
         .modal(true)
         .program_name("Rayonnage")
         .version(env!("CARGO_PKG_VERSION"))
-        .comments(t!("Comics, BD and manga manager inspired by ComicRack CE,\nwith the features of Bedetheque Scraper 2 and Library Organizer."))
+        .comments(t!("Comics, BD and manga library manager inspired by ComicRack CE."))
         .license_type(gtk::License::MitX11)
         .build()
         .present();

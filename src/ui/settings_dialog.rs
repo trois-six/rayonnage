@@ -143,6 +143,13 @@ pub fn open(state: &State) {
     cpage.append(&widgets::scrolled(&custom));
     notebook.append_page(&cpage, Some(&gtk::Label::new(Some(t!("Custom")))));
 
+    // --- Fetching info from bedetheque.com
+    let (bd_page, read_bedetheque) = super::scraper_ui::settings_page(s.scraper.clone());
+    bd_page.set_margin_start(6);
+    bd_page.set_margin_end(6);
+    bd_page.set_margin_top(6);
+    notebook.append_page(&bd_page, Some(&gtk::Label::new(Some("Bedetheque"))));
+
     let cancel = widgets::button(t!("Cancel"), false);
     let ok = widgets::button(t!("Save"), true);
     cancel.connect_clicked(glib::clone!(
@@ -162,6 +169,7 @@ pub fn open(state: &State) {
                 s.scan_on_startup = scan_startup.is_active();
                 s.remove_missing = remove_missing.is_active();
                 s.scan_threads = threads.value() as usize;
+                s.scraper = read_bedetheque();
                 s.allow_write_info = allow_write.is_active();
                 s.auto_update_files = auto_update.is_active();
                 s.rar_path = rar.text().trim().to_string();

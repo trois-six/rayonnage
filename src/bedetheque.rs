@@ -27,8 +27,6 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Book, MONTHS_FR, YesNo};
 use crate::util::find_program;
 
-/// Version of the original plugin this module is a port of.
-pub const PLUGIN_VERSION: &str = "6.08";
 
 const BASE_URL: &str = "https://www.bedetheque.com/";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
@@ -1370,7 +1368,7 @@ impl Scraper {
         } else {
             now.format("%A %d %B %Y %H:%M:%S").to_string()
         };
-        format!("Bedetheque.com - {date}\nBD2 scraper v{PLUGIN_VERSION}")
+        format!("Bedetheque.com - {date}\nRayonnage {}", env!("CARGO_PKG_VERSION"))
     }
 
     // -- log -----------------------------------------------------------------

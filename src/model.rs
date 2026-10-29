@@ -81,22 +81,63 @@ impl Manga {
 }
 
 /// One `<Page>` element of ComicInfo.xml.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct PageInfo {
     pub image: i32,
     /// FrontCover, InnerCover, Roundup, Story, Advertisement, Editorial,
     /// Letters, Preview, BackCover, Other, Deleted
+    #[serde(skip_serializing_if = "is_story")]
     pub page_type: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub double_page: bool,
+    #[serde(skip_serializing_if = "is_default")]
     pub image_size: i64,
+    #[serde(skip_serializing_if = "is_default")]
     pub key: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub bookmark: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub image_width: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub image_height: i32,
     /// None, Rotate90, Rotate180, Rotate270
+    #[serde(skip_serializing_if = "is_default")]
     pub rotation: String,
     /// Layout position of a page shown side by side: Default, Near, Far.
+    #[serde(skip_serializing_if = "is_default")]
     pub position: String,
+}
+
+impl Default for PageInfo {
+    fn default() -> Self {
+        PageInfo {
+            image: 0,
+            page_type: "Story".into(),
+            double_page: false,
+            image_size: 0,
+            key: String::new(),
+            bookmark: String::new(),
+            image_width: 0,
+            image_height: 0,
+            rotation: String::new(),
+            position: String::new(),
+        }
+    }
+}
+
+// The library file only stores values that differ from the defaults (a large
+// library has millions of page entries, almost all default).
+fn is_default<T: Default + PartialEq>(v: &T) -> bool {
+    *v == T::default()
+}
+
+fn is_unset(v: &i32) -> bool {
+    *v == -1
+}
+
+fn is_story(v: &String) -> bool {
+    v == "Story"
 }
 
 pub const ROTATIONS: &[&str] = &["None", "Rotate90", "Rotate180", "Rotate270"];
@@ -160,51 +201,96 @@ pub const PAGE_TYPES: &[&str] = &[
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ComicInfo {
+    #[serde(skip_serializing_if = "is_default")]
     pub title: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub series: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub number: String,
+    #[serde(skip_serializing_if = "is_unset")]
     pub count: i32,
+    #[serde(skip_serializing_if = "is_unset")]
     pub volume: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub alternate_series: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub alternate_number: String,
+    #[serde(skip_serializing_if = "is_unset")]
     pub alternate_count: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub summary: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub notes: String,
+    #[serde(skip_serializing_if = "is_unset")]
     pub year: i32,
+    #[serde(skip_serializing_if = "is_unset")]
     pub month: i32,
+    #[serde(skip_serializing_if = "is_unset")]
     pub day: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub writer: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub penciller: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub inker: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub colorist: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub letterer: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub cover_artist: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub editor: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub translator: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub publisher: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub imprint: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub genre: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub tags: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub web: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub page_count: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub language_iso: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub format: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub black_and_white: YesNo,
+    #[serde(skip_serializing_if = "is_default")]
     pub manga: Manga,
+    #[serde(skip_serializing_if = "is_default")]
     pub characters: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub teams: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub locations: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub scan_information: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub story_arc: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub story_arc_number: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub series_group: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub age_rating: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub community_rating: f32,
+    #[serde(skip_serializing_if = "is_default")]
     pub main_character_or_team: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub review: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub gtin: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub pages: Vec<PageInfo>,
     /// Unknown simple elements, preserved when rewriting the file.
+    #[serde(skip_serializing_if = "is_default")]
     pub extra: Vec<(String, String)>,
 }
 
@@ -266,29 +352,49 @@ impl Default for ComicInfo {
 pub struct Book {
     pub id: u64,
     pub file_path: PathBuf,
+    #[serde(skip_serializing_if = "is_default")]
     pub file_size: u64,
+    #[serde(skip_serializing_if = "is_default")]
     pub file_created: Option<DateTime<Local>>,
+    #[serde(skip_serializing_if = "is_default")]
     pub file_modified: Option<DateTime<Local>>,
     pub added: DateTime<Local>,
+    #[serde(skip_serializing_if = "is_default")]
     pub info: ComicInfo,
     // ComicRack-only properties (stored in the library database, not in the file).
+    #[serde(skip_serializing_if = "is_default")]
     pub rating: f32,
+    #[serde(skip_serializing_if = "is_default")]
     pub series_complete: YesNo,
+    #[serde(skip_serializing_if = "is_default")]
     pub opened: Option<DateTime<Local>>,
+    #[serde(skip_serializing_if = "is_default")]
     pub open_count: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub last_page_read: i32,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_price: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_age: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_condition: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_store: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_owner: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_collection_status: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_notes: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub book_location: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub isbn: String,
+    #[serde(skip_serializing_if = "is_default")]
     pub custom_values: BTreeMap<String, String>,
     pub checked: bool,
     /// Metadata changed in the library but not yet written to the file.
+    #[serde(skip_serializing_if = "is_default")]
     pub info_dirty: bool,
     /// Proposed values computed from the file name (sorting asks often).
     #[serde(skip)]

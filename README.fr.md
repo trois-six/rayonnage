@@ -112,20 +112,23 @@ liste, à partir d'un numéro donné, et peut enregistrer le nombre total.
     saturation, gamma, netteté, contraste automatique.
 - Les préréglages personnels sont enregistrables.
 
-### Bedetheque Scraper 2 (Ctrl+B)
-Portage du plugin. La recherche de la série, de l'album et de l'édition se fait sur bedetheque.com,
-avec une fenêtre de choix en cas d'ambiguïté.
+### Récupération des infos sur Bedetheque (Ctrl+B)
+Menu → « Récupérer les infos sur Bedetheque » (d'après le plugin Bedetheque Scrapper 2). La
+recherche de la série, de l'album et de l'édition se fait sur bedetheque.com, avec une fenêtre de
+choix en cas d'ambiguïté.
 - Champs récupérés : série, titre, numéro, auteurs, éditeur, collection, dépôt légal, ISBN, format,
   genre, résumé, note, nombre d'albums, série terminée, langue, lien web.
-- Chaque champ peut être activé ou désactivé, avec les options du plugin : articles, majuscules,
-  « One Shot », délai entre les livres, etc.
-- Commandes supplémentaires : « QuickScrape » à partir d'une URL, et re-scrape à partir du champ Web.
+- Paramètres → Bedetheque : chaque champ peut être activé ou désactivé, avec des options pour les
+  articles, les majuscules, « One Shot », le délai entre les livres, etc.
+- « Récupérer les infos depuis un lien Bedetheque… » prend l'URL d'un album, d'une série ou d'une
+  revue ; l'option « re-scrape » repart du champ Web des livres.
 - Si bedetheque.com refuse les requêtes directes (erreur 403, délai dépassé), l'application
   réessaie avec `curl`, présent par défaut sur Linux, macOS et Windows 10+.
 
-### Library Organizer (Ctrl+L)
-Portage du plugin : il déplace, copie ou simule le rangement des fichiers selon des modèles de
-dossier et de nom de fichier.
+### Rangement des fichiers (Ctrl+L)
+Menu → « Ranger les fichiers… » (d'après le plugin Library Organizer) : déplace, copie ou simule le
+rangement des fichiers selon des modèles de dossier et de nom de fichier. « Ranger à nouveau »
+réutilise les derniers profils ; « Annuler le dernier rangement » remet les fichiers en place.
 - Exemple de modèle : `{<publisher>}/{<series>}{ (<startyear>)}` et `{<series>}{ #<number3>}`.
 - Profils multiples, prévisualisation en direct.
 - Options de rangement : valeurs vides de remplacement, caractères interdits, noms des mois,

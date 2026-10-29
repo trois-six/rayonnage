@@ -30,28 +30,29 @@ pub fn scrape(state: &State) {
             t!("Rescrape"),
             move || {
                 if let Some(st) = weak.upgrade() {
-                    run_scrape_job(&st, "Bedetheque Scraper 2 (rescrape)…", items, settings);
+                    run_scrape_job(&st, t!("Fetching the info again from the Web links…"), items, settings);
                 }
             },
         );
     } else {
-        run_scrape_job(state, "Bedetheque Scraper 2…", items, settings);
+        run_scrape_job(state, t!("Fetching the info from Bedetheque…"), items, settings);
     }
 }
 
-/// "QuickScrape BD2": a bedetheque link is asked for each book.
+/// Fetch from a link: a bedetheque.com link is asked for each book.
 pub fn quick_scrape(state: &State) {
     let Some(books) = state.require_selection() else { return };
     ask_urls(state, books, 0, Vec::new());
 }
 
-/// "Configure BD2".
-pub fn configure(state: &State) {
-    let current = state.settings.borrow().scraper.clone();
-    let (win, content, buttons) = widgets::dialog(&state.window, t!("Configure Bedetheque Scraper 2"), 640, 560);
+/// Reads the settings back from the widgets of the Bedetheque settings tab.
+pub type ReadScraperSettings = Box<dyn Fn() -> ScraperSettings>;
+
+/// "Bedetheque" tab of the settings dialog: its widgets, and a function
+/// returning the edited settings.
+pub fn settings_page(current: ScraperSettings) -> (gtk::Notebook, ReadScraperSettings) {
     let notebook = gtk::Notebook::new();
     notebook.set_vexpand(true);
-    content.append(&notebook);
 
     // -- Data --------------------------------------------------------------
     let data = gtk::Box::new(gtk::Orientation::Vertical, 8);
@@ -183,71 +184,41 @@ pub fn configure(state: &State) {
         current.debug_log,
     );
     form.add_full(&debug);
-    let version = gtk::Label::builder()
-        .label(t!(
-            "Port of Bedetheque Scraper 2 v{0} (Franck, Mizio66, kiwi13 & maforget)",
-            crate::bedetheque::PLUGIN_VERSION
-        ))
-        .xalign(0.0)
-        .margin_top(16)
-        .build();
-    version.add_css_class("dim-label");
-    form.add_full(&version);
     notebook.append_page(&form.grid, Some(&gtk::Label::new(Some(t!("Log")))));
 
-    // -- Buttons -------------------------------------------------------------
-    let cancel = widgets::button(t!("Cancel"), false);
-    let save = widgets::button(t!("Save"), true);
-    cancel.connect_clicked(glib::clone!(
-        #[weak]
-        win,
-        move |_| win.close()
-    ));
-    save.connect_clicked(glib::clone!(
-        #[weak]
-        win,
-        #[weak]
-        state,
-        move |_| {
-            let mut s = current.clone();
-            for ((_, get), c) in FIELD_FLAGS.iter().zip(&field_checks) {
-                *get(&mut s) = c.is_active();
-            }
-            s.tags = tags.text().to_string();
-            s.subpatt = subpatt.text().to_string();
-            s.pad_number = pad.value_as_int().max(0) as u32;
-            s.one_shot_format = one_shot.is_active();
-            s.short_web_link = short_web.is_active();
-            s.count_of = count_of.is_active();
-            s.count_only_if_complete = count_complete.is_active();
-            s.serie_resume_everywhere = resume_everywhere.is_active();
-            s.accept_generic_artists = generic.is_active();
-            s.lang_fr = lang.selected() == 0;
-            s.articles = articles.text().to_string();
-            s.titleit = titleit.is_active();
-            s.format_articles = format_articles.is_active();
-            s.auto_choose_edition = auto_edition.is_active();
-            s.always_choose_serie = always_serie.is_active();
-            s.max_books = max_books.value_as_int().max(0) as u32;
-            s.delay_secs = delay.value_as_int().max(0) as u32;
-            s.ambiguity = match ambiguity.selected() {
-                0 => Ambiguity::Skip,
-                1 => Ambiguity::Ask,
-                _ => Ambiguity::AskWithTimeout,
-            };
-            s.popup_timeout_secs = popup.value_as_int().max(1) as u32;
-            s.rescrape = rescrape.is_active();
-            s.debug_log = debug.is_active();
-            state.settings.borrow_mut().scraper = s;
-            if let Err(e) = state.settings.borrow().save() {
-                widgets::alert(&state.window, t!("Error"), &t!("Unable to save the settings: {0}", format!("{e:#}")));
-            }
-            win.close();
+    let read = move || {
+        let mut s = current.clone();
+        for ((_, get), c) in FIELD_FLAGS.iter().zip(&field_checks) {
+            *get(&mut s) = c.is_active();
         }
-    ));
-    buttons.append(&cancel);
-    buttons.append(&save);
-    win.present();
+        s.tags = tags.text().to_string();
+        s.subpatt = subpatt.text().to_string();
+        s.pad_number = pad.value_as_int().max(0) as u32;
+        s.one_shot_format = one_shot.is_active();
+        s.short_web_link = short_web.is_active();
+        s.count_of = count_of.is_active();
+        s.count_only_if_complete = count_complete.is_active();
+        s.serie_resume_everywhere = resume_everywhere.is_active();
+        s.accept_generic_artists = generic.is_active();
+        s.lang_fr = lang.selected() == 0;
+        s.articles = articles.text().to_string();
+        s.titleit = titleit.is_active();
+        s.format_articles = format_articles.is_active();
+        s.auto_choose_edition = auto_edition.is_active();
+        s.always_choose_serie = always_serie.is_active();
+        s.max_books = max_books.value_as_int().max(0) as u32;
+        s.delay_secs = delay.value_as_int().max(0) as u32;
+        s.ambiguity = match ambiguity.selected() {
+            0 => Ambiguity::Skip,
+            1 => Ambiguity::Ask,
+            _ => Ambiguity::AskWithTimeout,
+        };
+        s.popup_timeout_secs = popup.value_as_int().max(1) as u32;
+        s.rescrape = rescrape.is_active();
+        s.debug_log = debug.is_active();
+        s
+    };
+    (notebook, Box::new(read))
 }
 
 type FlagAccessor = fn(&mut ScraperSettings) -> &mut bool;
@@ -420,7 +391,7 @@ fn run_scrape_job(state: &State, title: &str, items: Vec<(Book, Option<String>)>
                     text.push_str(t!("\n\nLog:\n"));
                     text.push_str(&res.log.join("\n"));
                 }
-                widgets::show_log(&st.window, t!("Bedetheque Scraper 2 — report"), &text);
+                widgets::show_log(&st.window, t!("Bedetheque — report"), &text);
             }
         },
     );
@@ -457,12 +428,12 @@ fn ask_urls(state: &State, books: Vec<Book>, index: usize, mut acc: Vec<(Book, O
     if index >= books.len() {
         if !acc.is_empty() {
             let settings = state.settings.borrow().scraper.clone();
-            run_scrape_job(state, "QuickScrape BD2…", acc, settings);
+            run_scrape_job(state, t!("Fetching the info from Bedetheque links…"), acc, settings);
         }
         return;
     }
     let book = books[index].clone();
-    let (win, content, buttons) = widgets::dialog(&state.window, t!("QuickScrape BD2 — scrape a link directly"), 680, 170);
+    let (win, content, buttons) = widgets::dialog(&state.window, t!("Fetch the info from a Bedetheque link"), 680, 170);
     let caption = gtk::Label::builder().xalign(0.0).wrap(true).build();
     caption.set_markup(&format!(
         "<b>{}</b>  <span alpha=\"60%\">({}/{})</span>",
@@ -556,7 +527,7 @@ fn ask_urls(state: &State, books: Vec<Book>, index: usize, mut acc: Vec<(Book, O
                         glib::idle_add_local_once(glib::clone!(
                             #[weak]
                             state,
-                            move || run_scrape_job(&state, "QuickScrape BD2…", acc, settings)
+                            move || run_scrape_job(&state, t!("Fetching the info from Bedetheque links…"), acc, settings)
                         ));
                     }
                 }

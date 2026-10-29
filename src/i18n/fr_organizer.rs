@@ -47,15 +47,10 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "Le modèle de fichier ne peut pas être vide quand l'organisation des fichiers est activée.",
     ),
     (
-        "Enable folder or file organization so that the script does something.",
-        "Activez l'organisation des dossiers ou des fichiers pour que le script fasse quelque chose.",
-    ),
-    (
         "The failed folder cannot be empty when moving failed books is enabled.",
         "Le dossier des échecs ne peut pas être vide quand le déplacement des échecs est activé.",
     ),
     // --- organizer.rs: report and log
-    ("Library Organizer Report:\n\n{0}", "Rapport de Library Organizer :\n\n{0}"),
     ("{0}:\n{1}: {2}", "{0} :\n{1} : {2}"),
     ("Message: {0}", "Message : {0}"),
     (
@@ -119,12 +114,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("{0} is empty.", "{0} est vide."),
     // --- ui/organizer_ui.rs: quick run, undo, results
     ("Empty base folder", "Dossier de base vide"),
-    (
-        "Library Organizer will not work as expected while the base folder is empty. \
-         First configure the profile with \u{201c}Library Organizer…\u{201d}.",
-        "Library Organizer ne fonctionnera pas comme prévu tant que le dossier de base est vide. \
-         Configurez d'abord le profil avec « Library Organizer… ».",
-    ),
     ("Incompatible settings", "Paramètres incompatibles"),
     ("Nothing to undo.", "Rien à annuler."),
     ("Undo the last organization?", "Annuler la dernière organisation ?"),
@@ -297,10 +286,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("This profile name is already used.", "Ce nom de profil est déjà utilisé."),
     ("Import profiles", "Importer des profils"),
     ("Import failed", "Importation impossible"),
-    (
-        "This file does not contain any Library Organizer profile.",
-        "Ce fichier ne contient aucun profil Library Organizer.",
-    ),
     ("Profiles imported", "Profils importés"),
     ("{0} profile(s) imported.", "{0} profil(s) importé(s)."),
     ("library-organizer-profiles", "profils-library-organizer"),
@@ -314,4 +299,16 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("char.", "car."),
     ("Add", "Ajouter"),
     ("New character:", "Nouveau caractère :"),
+    (
+        "Files cannot be organized while the base folder is empty. First configure the profile with \u{201c}Organize Files…\u{201d}.",
+        "Impossible de ranger les fichiers tant que le dossier de base est vide. Configurez d'abord le profil avec « Ranger les fichiers… ».",
+    ),
+    ("Organize Files", "Ranger les fichiers"),
+    ("This file does not contain any organization profile.", "Ce fichier ne contient aucun profil de rangement."),
+    ("Organization Report:\n\n{0}", "Rapport de rangement :\n\n{0}"),
+    ("Enable folder or file organization, otherwise nothing would be done.", "Activez le rangement des dossiers ou des fichiers, sinon rien ne serait fait."),
+    ("Organize Files…", "Ranger les fichiers…"),
+    ("Organize Files Again", "Ranger à nouveau (derniers profils)"),
+    ("Undo Last Organization", "Annuler le dernier rangement"),
+    ("Organize files (Ctrl+L)", "Ranger les fichiers (Ctrl+L)"),
 ];

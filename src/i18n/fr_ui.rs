@@ -31,9 +31,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Update Book Files", "Mettre à jour les fichiers"),
     ("Refresh", "Rafraîchir depuis les fichiers"),
     ("Refresh (force reread)", "Rafraîchir (forcer la relecture)"),
-    ("Configure BD2…", "Configurer BD2…"),
-    ("Library Organizer (quick)", "Library Organizer (rapide)"),
-    ("Undo Last Move", "Annuler le dernier déplacement"),
     ("Open Book", "Ouvrir le livre"),
     ("Open Containing Folder", "Ouvrir le dossier contenant"),
     ("Remove from Library", "Retirer de la bibliothèque"),
@@ -103,10 +100,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "Retirer {0} livre(s) de la bibliothèque ? Les fichiers ne sont pas supprimés (ils réapparaîtront au prochain scan s'ils sont dans un dossier scanné).",
     ),
     ("Remove", "Retirer"),
-    (
-        "Comics, BD and manga manager inspired by ComicRack CE,\nwith the features of Bedetheque Scraper 2 and Library Organizer.",
-        "Gestion de BD, comics et mangas inspirée de ComicRack CE,\navec les fonctions de Bedetheque Scraper 2 et Library Organizer.",
-    ),
     // Common widgets
     ("Save…", "Enregistrer…"),
     ("Close", "Fermer"),
@@ -215,4 +208,5 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Light", "Clair"),
     ("Dark", "Sombre"),
     ("Appearance:", "Apparence :"),
+    ("Comics, BD and manga library manager inspired by ComicRack CE.", "Gestionnaire de bibliothèque de BD, comics et mangas inspiré de ComicRack CE."),
 ];
