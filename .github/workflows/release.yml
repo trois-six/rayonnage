@@ -1,0 +1,79 @@
+name: Release
+
+# A tag v* builds the three packages and publishes them in a GitHub release;
+# a manual run only builds them (as workflow artifacts).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-4-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - run: ./packaging/package-linux.sh "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - run: brew install gtk4 librsvg adwaita-icon-theme pkgconf dylibbundler
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "12.0"
+      - run: ./packaging/package-macos.sh "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.zip
+
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            zip
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-librsvg
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-rust
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-gcc
+      - run: cargo build --release --locked
+      - run: ./packaging/package-windows.sh "$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - run: gh release create "$GITHUB_REF_NAME" assets/* --repo "$GITHUB_REPOSITORY" --title "Rayonnage ${GITHUB_REF_NAME#v}" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

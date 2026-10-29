@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Rayonnage
+GenericName=Comic library
+Comment=Comic, BD and manga library manager
+Exec=rayonnage
+Icon=org.troissix.Rayonnage
+Terminal=false
+Categories=Graphics;Viewer;Office;GTK;
+Keywords=comics;bd;manga;cbz;cbr;comicinfo;
+StartupWMClass=rayonnage
