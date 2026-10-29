@@ -66,6 +66,27 @@ pub fn quick(state: &State) {
     launch(state, books, profiles);
 }
 
+/// Runs one profile on the selection (profile menu of the toolbar button);
+/// it becomes the profile of "Organize Files Again".
+pub fn run_profile(state: &State, name: &str) {
+    let Some(books) = state.require_selection() else {
+        return;
+    };
+    let Some(profile) = state.settings.borrow().organizer.profile(name).cloned() else {
+        return;
+    };
+    if let Some(err) = validation_errors(std::slice::from_ref(&profile)) {
+        widgets::alert(&state.window, t!("Incompatible settings"), &err);
+        return;
+    }
+    {
+        let mut s = state.settings.borrow_mut();
+        s.organizer.last_used = vec![name.to_string()];
+        let _ = s.save();
+    }
+    launch(state, books, vec![profile]);
+}
+
 /// "Undo the last organization".
 pub fn undo(state: &State) {
     let path = Settings::undo_path();

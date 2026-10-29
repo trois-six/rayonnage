@@ -311,4 +311,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Organize Files Again", "Ranger à nouveau (derniers profils)"),
     ("Undo Last Organization", "Annuler le dernier rangement"),
     ("Organize files (Ctrl+L)", "Ranger les fichiers (Ctrl+L)"),
+    ("Organize with a profile", "Ranger avec un profil"),
+    ("Organize with the profile", "Ranger avec le profil"),
 ];

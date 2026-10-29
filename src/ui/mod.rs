@@ -388,11 +388,35 @@ fn build_layout(state: &State) -> gtk::Box {
         .tooltip_text(t!("Fetch info from Bedetheque (Ctrl+B)"))
         .action_name("win.bd-scrape")
         .build();
-    let organize_btn = gtk::Button::builder()
+    // Organize button with an arrow listing the profiles (as the
+    // ComicRack toolbar button of Library Organizer).
+    let organize_main = gtk::Button::builder()
         .child(&icons::icon(icons::Icon::Organizer))
         .tooltip_text(t!("Organize files (Ctrl+L)"))
         .action_name("win.organize")
         .build();
+    let organize_arrow = gtk::MenuButton::builder()
+        .icon_name("pan-down-symbolic")
+        .tooltip_text(t!("Organize with a profile"))
+        .build();
+    let weak = Rc::downgrade(state);
+    organize_arrow.set_create_popup_func(move |b| {
+        let Some(st) = weak.upgrade() else { return };
+        let menu = gio::Menu::new();
+        let profiles = gio::Menu::new();
+        for p in &st.settings.borrow().organizer.profiles {
+            let item = gio::MenuItem::new(Some(&p.name), None);
+            item.set_action_and_target_value(Some("win.organize-profile"), Some(&p.name.to_variant()));
+            profiles.append_item(&item);
+        }
+        menu.append_section(Some(t!("Organize with the profile")), &profiles);
+        menu.append_section(None, &organize_section());
+        b.set_menu_model(Some(&menu));
+    });
+    let organize_btn = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    organize_btn.add_css_class("linked");
+    organize_btn.append(&organize_main);
+    organize_btn.append(&organize_arrow);
     header.pack_start(&scan_btn);
     header.pack_start(&edit_btn);
     header.pack_start(&write_btn);
@@ -655,6 +679,14 @@ fn build_actions(app: &gtk::Application, state: &State) {
     add("organize", organizer_ui::open);
     add("organize-quick", organizer_ui::quick);
     add("organize-undo", organizer_ui::undo);
+    let organize_profile = gio::SimpleAction::new("organize-profile", Some(glib::VariantTy::STRING));
+    let weak = Rc::downgrade(state);
+    organize_profile.connect_activate(move |_, p| {
+        if let (Some(st), Some(name)) = (weak.upgrade(), p.and_then(|v| v.str().map(str::to_string))) {
+            organizer_ui::run_profile(&st, &name);
+        }
+    });
+    win.add_action(&organize_profile);
     add("open-folder", open_folder);
     add("open-file", open_file);
     add("remove", remove_selected);
