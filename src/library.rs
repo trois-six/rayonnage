@@ -28,6 +28,10 @@ pub fn migrate_old_dirs() {
         (old.data_dir(), new.data_dir(), "organizer-undo.json"),
     ];
     for (from, to, name) in files {
+        // The JSON library is only needed before the database exists.
+        if name == "library.json" && new.data_dir().join("library.db").exists() {
+            continue;
+        }
         let (src, dst) = (from.join(name), to.join(name));
         if src.is_file() && !dst.exists() {
             let _ = std::fs::create_dir_all(to);
@@ -98,6 +102,7 @@ impl Library {
         db.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA synchronous = NORMAL;
+             PRAGMA journal_size_limit = 4194304;
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS books (id INTEGER PRIMARY KEY, data BLOB NOT NULL);",
         )?;

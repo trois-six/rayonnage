@@ -1511,6 +1511,11 @@ fn debug_screenshots(state: &State) {
                     }
                     return;
                 }
+                // "close" closes the window like its close button.
+                if a == "close" {
+                    win.close();
+                    return;
+                }
                 // "move-col:Title" simulates dragging a column header to the first place.
                 if let Some(key) = a.strip_prefix("move-col:") {
                     if let Some(st) = win.data_state()

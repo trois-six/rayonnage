@@ -180,6 +180,10 @@ cargo build --release
 
 The `.github/workflows/ci.yml` workflow builds and tests the application on the three systems.
 
+On Linux, Rayonnage uses GTK's OpenGL renderer: with some drivers (NVIDIA), the Vulkan renderer
+that GTK picks by default takes several seconds to shut down when the application closes. Set
+`GSK_RENDERER` (for example `GSK_RENDERER=vulkan`) to choose another one.
+
 ### External programs (optional)
 Their paths are set in Settings → Files.
 - `rar` (WinRAR / RAR) is used to create CBR files and to write ComicInfo.xml into a CBR. RAR is a
