@@ -89,8 +89,10 @@ Boîte « Informations » sur le modèle de ComicRack, pour un ou plusieurs livr
     fin du fichier sans réécrire les pages :
     quelques Ko écrits au lieu de tout le livre. Le reste du fichier n'est pas touché.
   - Comme dans ComicRack, les pages ne sont ni renommées ni modifiées.
-- **Rafraîchir depuis les fichiers** relit les informations. La version « forcer » remplace les
-  valeurs de la bibliothèque.
+- **Rafraîchir depuis les fichiers** relit les informations ; comme dans ComicRack, elle ne remplit
+  que les valeurs vides et laisse de côté les livres dont les modifications ne sont pas encore
+  écrites dans le fichier (ils sont listés dans le journal). La version « forcer » remplace les
+  valeurs de la bibliothèque par celles des fichiers, en annulant les modifications non écrites.
 
 ### Numérotation automatique (Ctrl+Maj+N)
 Reprend l'« Autonumber Wizard » : il numérote la série ou la série alternative dans l'ordre de la

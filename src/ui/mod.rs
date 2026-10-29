@@ -1358,12 +1358,16 @@ fn refresh(state: &State, force: bool) {
             let total = books.len();
             let mut ok = Vec::new();
             let mut errors = Vec::new();
+            // As in ComicRack, a simple refresh leaves alone the books whose
+            // changes are not written to their file yet.
+            let mut skipped = Vec::new();
             for (i, mut b) in books.into_iter().enumerate() {
                 if ctx.cancelled() {
                     break;
                 }
                 ctx.progress(i, total, b.file_name());
                 if b.info_dirty && !force {
+                    skipped.push(b.file_path.display().to_string());
                     continue;
                 }
                 match library::refresh_from_file(&mut b, force) {
@@ -1374,18 +1378,28 @@ fn refresh(state: &State, force: bool) {
                     Err(e) => errors.push(t!("{0}: {1}", b.file_path.display(), format!("{e:#}"))),
                 }
             }
-            (ok, errors)
+            (ok, errors, skipped)
         },
-        |st, (ok, errors)| {
+        |st, (ok, errors, skipped)| {
             let n = ok.len();
             for b in &ok {
                 st.journal.info(&t!("Reread: {0}", b.file_path.display()));
+            }
+            for p in &skipped {
+                st.journal.info(&t!("Not reread (changes not written to the file): {0}", p));
             }
             for e in &errors {
                 st.journal.error(e);
             }
             st.update_books(ok, false);
-            st.set_status(&with_errors(t!("{0} book(s) refreshed", n), errors.len()));
+            let mut msg = t!("{0} book(s) refreshed", n);
+            if !skipped.is_empty() {
+                msg.push_str(&t!(
+                    " — {0} book(s) with unwritten changes left alone: use \u{201c}Refresh (force reread)\u{201d} to discard the changes",
+                    skipped.len()
+                ));
+            }
+            st.set_status(&with_errors(msg, errors.len()));
         },
     );
 }

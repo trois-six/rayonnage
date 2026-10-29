@@ -86,8 +86,10 @@ forced in Settings → Library (applied at the next start).
     without rewriting the pages: a few KB are written instead of the whole book, and the rest of
     the file is left untouched.
   - As in ComicRack, pages are neither renamed nor modified.
-- **Refresh** reads the information from the files again. The "force" variant replaces the
-  library values.
+- **Refresh** reads the information from the files again; as in ComicRack, it only fills the empty
+  values and leaves alone the books whose changes are not written to their file yet (they are
+  listed in the log). The "force" variant replaces the library values with those of the files,
+  discarding unwritten changes.
 
 ### Automatic numbering (Ctrl+Shift+N)
 Reproduces the "Autonumber Wizard": numbers the series or the alternate series in list order,

@@ -237,4 +237,9 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "Dossier local correspondant à chaque lecteur ou partage Windows utilisé par les profils :",
     ),
     ("Import", "Importer"),
+    ("Not reread (changes not written to the file): {0}", "Non relu (modifications non écrites dans le fichier) : {0}"),
+    (
+        " — {0} book(s) with unwritten changes left alone: use \u{201c}Refresh (force reread)\u{201d} to discard the changes",
+        " — {0} livre(s) aux modifications non écrites laissé(s) tel(s) quel(s) : utilisez « Rafraîchir (forcer la relecture) » pour annuler les modifications",
+    ),
 ];
