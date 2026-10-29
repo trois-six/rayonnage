@@ -2915,6 +2915,12 @@ pub fn undo(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Destination preview with "/" separators, so the expected paths below
+    /// are the same on Windows.
+    fn preview(b: &Book, lib: &[Book], p: &Profile) -> String {
+        super::preview(b, lib, p).replace('\\', "/")
+    }
     use std::cell::RefCell;
 
     fn book(series: &str, number: &str, volume: i32, year: i32, month: i32) -> Book {
@@ -3350,6 +3356,7 @@ mod tests {
         assert!(
             r.log[1]
                 .message
+                .replace('\\', "/")
                 .ends_with("Dargaud/Blake et Mortimer/Blake et Mortimer #01.cbz")
         );
         assert!(
@@ -3512,6 +3519,7 @@ mod tests {
                 .last()
                 .unwrap()
                 .message
+                .replace('\\', "/")
                 .ends_with("Blake et Mortimer - 001.cbz")
         );
         p1.exclude_folders = vec![path_str(&tmp.path().join("in"))];
