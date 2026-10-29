@@ -21,8 +21,12 @@ et [Library Organizer](https://github.com/Stonepaw/comicrack-library-organizer).
   - pour un PDF, le nombre de pages est cherché au début et à la fin du fichier, et le document
     n'est lu en entier qu'en dernier recours.
 - Formats lus, comme ComicRack CE : `.cbz` `.zip`, `.cbr` `.rar` (RAR4 et RAR5), `.cb7` `.7z`,
-  `.cbt` `.tar`, `.pdf`, `.djvu`. Le vrai format est détecté par les octets magiques, donc un ZIP
-  renommé en `.cbr` est accepté.
+  `.cbt` `.tar`, `.pdf`, `.djvu`, ainsi que `.epub`. Le vrai format est détecté par les octets
+  magiques, donc un ZIP renommé en `.cbr` est accepté.
+- EPUB : les pages sont les images du livre dans l'ordre de lecture (couverture en premier), et les
+  informations viennent du paquet OPF : titre, auteurs avec leur rôle (scénariste, dessinateur,
+  coloriste…), éditeur, date, langue, résumé, sujets, ISBN, série calibre ou EPUB 3 et numéro. Les
+  EPUB peuvent être convertis en CBZ/CB7/CBR/PDF ; leurs informations restent dans la bibliothèque.
 - Images de pages reconnues : jpg, jpeg, jif, jiff, gif, png, tif, tiff, bmp, webp, heic, heif,
   avif, jp2, j2k, jxl. Elles sont triées dans l'ordre naturel, et `__MACOSX` est ignoré.
 - Lecture de `ComicInfo.xml` dans l'archive, ou d'un fichier XML placé à côté du livre.
@@ -49,7 +53,12 @@ et [Library Organizer](https://github.com/Stonepaw/comicrack-library-organizer).
     livres apparaissent au fur et à mesure.
   - Le **Journal des messages** (Ctrl+J, ou le bouton « Journal » en bas à droite) détaille chaque
     opération : fichiers ajoutés, convertis ou écrits, et erreurs. Il est aussi copié dans le fichier
-    `journal.log` du dossier de cache.
+    `journal.log` du dossier de cache, vidé à chaque démarrage. Un champ de recherche (Ctrl+F)
+    surligne les résultats ; Entrée / Maj+Entrée (ou F3 / Maj+F3) passent au suivant / précédent ;
+    « Erreurs uniquement » masque le reste.
+- Apparence claire ou sombre dans Paramètres → Bibliothèque : « Système » garde le thème du bureau,
+  « Clair » et « Sombre » utilisent le thème intégré de GTK (les thèmes de bureau n'ont souvent
+  qu'une seule variante).
 
 ### Édition des informations (Ctrl+I)
 Boîte « Informations » sur le modèle de ComicRack, pour un ou plusieurs livres.

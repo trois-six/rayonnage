@@ -14,7 +14,7 @@ use crate::util::{extension_lower, natural_cmp};
 
 /// Extensions of the book files discovered by the library scan.
 pub const SOURCE_EXTENSIONS: &[&str] = &[
-    "cbz", "zip", "cbr", "rar", "cb7", "7z", "cbt", "tar", "pdf", "djvu", "djv",
+    "cbz", "zip", "cbr", "rar", "cb7", "7z", "cbt", "tar", "pdf", "djvu", "djv", "epub",
 ];
 
 /// Page image types recognised inside archives (same list as ComicRack CE).
@@ -59,6 +59,7 @@ pub enum BookFormat {
     Tar,
     Pdf,
     Djvu,
+    Epub,
 }
 
 impl BookFormat {
@@ -71,6 +72,7 @@ impl BookFormat {
             "cbt" | "tar" => BookFormat::Tar,
             "pdf" => BookFormat::Pdf,
             "djvu" | "djv" => BookFormat::Djvu,
+            "epub" => BookFormat::Epub,
             _ => return None,
         })
     }
@@ -82,7 +84,12 @@ impl BookFormat {
         let n = File::open(path).and_then(|mut f| f.read(&mut head)).unwrap_or(0);
         let head = &head[..n];
         if head.starts_with(b"PK\x03\x04") || head.starts_with(b"PK\x05\x06") {
-            Some(BookFormat::Zip)
+            // An EPUB is a ZIP whose first entry is "mimetype".
+            if head.get(30..38) == Some(b"mimetype") || extension_lower(path) == "epub" {
+                Some(BookFormat::Epub)
+            } else {
+                Some(BookFormat::Zip)
+            }
         } else if head.starts_with(b"Rar!\x1a\x07") {
             Some(BookFormat::Rar)
         } else if head.starts_with(b"7z\xbc\xaf\x27\x1c") {
@@ -106,6 +113,7 @@ impl BookFormat {
             BookFormat::Tar => "eComic (TAR)",
             BookFormat::Pdf => t!("PDF Document"),
             BookFormat::Djvu => t!("DjVu Document"),
+            BookFormat::Epub => t!("EPUB Document"),
         }
     }
 
@@ -114,7 +122,7 @@ impl BookFormat {
         match self {
             BookFormat::Zip | BookFormat::SevenZip | BookFormat::Tar => true,
             BookFormat::Rar => rar_program().is_some(),
-            BookFormat::Pdf | BookFormat::Djvu => false,
+            BookFormat::Pdf | BookFormat::Djvu | BookFormat::Epub => false,
         }
     }
 }
@@ -364,6 +372,25 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
             page_count: djvu_page_count(path).unwrap_or(0),
             info: None,
         },
+        BookFormat::Epub => {
+            // Only container.xml and the OPF are read (usually at the start
+            // of the archive); the page count is the number of images.
+            let mut zip = zip::ZipArchive::new(ChunkReader::open(path)?)?;
+            let package = crate::epub::read_package(&mut zip, false)?;
+            let info_name = zip
+                .file_names_raw()
+                .map(|n| String::from_utf8_lossy(n).into_owned())
+                .find(|n| is_comicinfo_name(n));
+            let embedded = info_name.and_then(|n| {
+                    let mut s = String::new();
+                    zip.by_name(&n).ok()?.read_to_string(&mut s).ok()?;
+                    comicinfo::parse(&s).ok()
+                });
+            BookContent {
+                page_count: package.image_count,
+                info: Some(embedded.unwrap_or(package.info)),
+            }
+        }
     })
 }
 
@@ -518,8 +545,33 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
         }
         BookFormat::Pdf => pdf_pages(path, limit)?,
         BookFormat::Djvu => djvu_pages(path, limit)?,
+        BookFormat::Epub => {
+            let mut zip = zip::ZipArchive::new(BufReader::new(File::open(path)?))?;
+            let mut names = crate::epub::read_package(&mut zip, true)?.pages;
+            if names.is_empty() {
+                // No image in the spine: every image of the archive.
+                names = zip
+                    .file_names_raw()
+                    .map(|n| String::from_utf8_lossy(n).into_owned())
+                    .filter(|n| is_image_name(n))
+                    .collect();
+                sort_pages(&mut names);
+            }
+            if let Some(l) = limit {
+                names.truncate(l);
+            }
+            let mut out = Vec::with_capacity(names.len());
+            for n in names {
+                let mut f = zip.by_name(&n)?;
+                let mut data = Vec::with_capacity(f.size() as usize);
+                f.read_to_end(&mut data)?;
+                out.push(Page { name: n, data });
+            }
+            out
+        }
     };
-    if !matches!(fmt, BookFormat::Pdf | BookFormat::Djvu) {
+    // Reading order: given by the document for PDF, DjVu and EPUB.
+    if !matches!(fmt, BookFormat::Pdf | BookFormat::Djvu | BookFormat::Epub) {
         pages.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     }
     if let Some(l) = limit {
@@ -734,7 +786,7 @@ impl OutputFormat {
             BookFormat::SevenZip => OutputFormat::Cb7,
             BookFormat::Tar => OutputFormat::Cbt,
             BookFormat::Pdf => OutputFormat::Pdf,
-            BookFormat::Djvu => OutputFormat::Cbz,
+            BookFormat::Djvu | BookFormat::Epub => OutputFormat::Cbz,
         }
     }
 }
@@ -1011,7 +1063,7 @@ pub fn write_comic_info(path: &Path, info: &ComicInfo) -> Result<()> {
                 bail!(t!("rar failed: {0}", String::from_utf8_lossy(&out.stderr)));
             }
         }
-        BookFormat::Pdf | BookFormat::Djvu => {
+        BookFormat::Pdf | BookFormat::Djvu | BookFormat::Epub => {
             bail!(t!("This format cannot store the book information in the file"))
         }
     }
@@ -1240,6 +1292,16 @@ mod tests {
                 std::io::copy(&mut z.by_index(k).unwrap(), &mut std::io::sink()).unwrap();
             }
         }
+        // EPUB: pages in reading order, OPF metadata, conversion to CBZ.
+        let epub = dir.path().join("book.epub");
+        std::fs::write(&epub, crate::epub::tests::sample_epub()).unwrap();
+        assert_eq!(BookFormat::detect(&epub), Some(BookFormat::Epub));
+        let c = read_content(&epub).unwrap();
+        assert_eq!(c.page_count, 3);
+        assert_eq!(c.info.unwrap().penciller, "Félix Meynet");
+        let names: Vec<String> = read_pages(&epub).unwrap().into_iter().map(|p| p.name).collect();
+        assert_eq!(names, ["OEBPS/Images/cover.png", "OEBPS/Images/p1.png", "OEBPS/Images/p2.png"]);
+        assert!(write_comic_info(&epub, &info).is_err());
         let pdf = dir.path().join("book.pdf");
         write_book(&pdf, OutputFormat::Pdf, &pages, None, 1).unwrap();
         assert_eq!(read_content(&pdf).unwrap().page_count, 2);

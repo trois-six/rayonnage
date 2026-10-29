@@ -11,6 +11,7 @@ mod journal;
 mod organizer_ui;
 mod scraper_ui;
 mod settings_dialog;
+pub mod theme;
 pub mod widgets;
 
 use std::cell::{Cell, RefCell};
@@ -172,6 +173,7 @@ pub fn build_ui(app: &gtk::Application) {
     });
 
     inline_edit::install_css();
+    theme::apply(state.settings.borrow().theme);
     build_columns(&state);
     watch_columns(&state);
     fill_store(&state);
@@ -651,6 +653,14 @@ fn build_actions(app: &gtk::Application, state: &State) {
     add("about", about);
     add("inline-edit", inline_edit::edit_selection);
     add("journal", |st| st.journal.open(&st.window));
+    let errors_only = gio::SimpleAction::new("journal-errors-only", Some(glib::VariantTy::BOOLEAN));
+    let weak = Rc::downgrade(state);
+    errors_only.connect_activate(move |_, p| {
+        if let (Some(st), Some(on)) = (weak.upgrade(), p.and_then(|v| v.get::<bool>())) {
+            st.journal.set_errors_only(on);
+        }
+    });
+    win.add_action(&errors_only);
 
     let convert = gio::SimpleAction::new("convert", Some(glib::VariantTy::STRING));
     let weak = Rc::downgrade(state);
@@ -1393,6 +1403,30 @@ fn debug_screenshots(state: &State) {
             win,
             move || {
                 let a = a.as_str();
+                // "find:TEXT" types TEXT in the search field of the open log window.
+                if let Some(text) = a.strip_prefix("find:") {
+                    fn find_entry(w: &gtk::Widget) -> Option<gtk::SearchEntry> {
+                        if let Some(e) = w.downcast_ref::<gtk::SearchEntry>() {
+                            return Some(e.clone());
+                        }
+                        let mut c = w.first_child();
+                        while let Some(child) = c {
+                            if let Some(e) = find_entry(&child) {
+                                return Some(e);
+                            }
+                            c = child.next_sibling();
+                        }
+                        None
+                    }
+                    for w in gtk::Window::list_toplevels() {
+                        if w.downcast_ref::<gtk::Window>().is_some_and(|w| w.transient_for().is_some())
+                            && let Some(e) = find_entry(&w)
+                        {
+                            e.set_text(text);
+                        }
+                    }
+                    return;
+                }
                 if a.starts_with("select:") || a.starts_with("type:") || a.starts_with("key:") {
                     if let Some(st) = win.data_state() {
                         inline_edit::debug_action(&st, a);

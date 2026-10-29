@@ -132,8 +132,8 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "Retirer de la bibliothèque les livres dont le fichier a disparu",
     ),
     (
-        "Folders scanned for books (cbz, zip, cbr, rar, cb7, 7z, cbt, tar, pdf, djvu):",
-        "Dossiers scannés à la recherche de livres (cbz, zip, cbr, rar, cb7, 7z, cbt, tar, pdf, djvu) :",
+        "Folders scanned for books (cbz, zip, cbr, rar, cb7, 7z, cbt, tar, pdf, djvu, epub):",
+        "Dossiers scannés à la recherche de livres (cbz, zip, cbr, rar, cb7, 7z, cbt, tar, pdf, djvu, epub) :",
     ),
     ("Parallel reads during the scan:", "Lectures simultanées pendant le scan :"),
     (
@@ -205,4 +205,14 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("A file named {0} already exists", "Un fichier nommé {0} existe déjà"),
     ("Rename", "Renommer"),
     ("Renamed: {0} → {1}", "Renommé : {0} → {1}"),
+    ("Errors only", "Erreurs uniquement"),
+    ("Search the log (Ctrl+F)", "Rechercher dans le journal (Ctrl+F)"),
+    ("Previous match (Shift+Enter)", "Résultat précédent (Maj+Entrée)"),
+    ("Next match (Enter)", "Résultat suivant (Entrée)"),
+    ("No match", "Aucun résultat"),
+    ("{0} match(es)", "{0} résultat(s)"),
+    ("System", "Système"),
+    ("Light", "Clair"),
+    ("Dark", "Sombre"),
+    ("Appearance:", "Apparence :"),
 ];

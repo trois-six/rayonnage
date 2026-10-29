@@ -24,8 +24,12 @@ forced in Settings → Library (applied at the next start).
   - for a PDF, the page count is looked for at the beginning and the end of the file; the whole
     document is only parsed as a last resort.
 - Formats read, like ComicRack CE: `.cbz` `.zip`, `.cbr` `.rar` (RAR4 and RAR5), `.cb7` `.7z`,
-  `.cbt` `.tar`, `.pdf`, `.djvu`. The real format is detected from the magic bytes, so a ZIP
-  renamed to `.cbr` is accepted.
+  `.cbt` `.tar`, `.pdf`, `.djvu`, plus `.epub`. The real format is detected from the magic bytes,
+  so a ZIP renamed to `.cbr` is accepted.
+- EPUB: the pages are the images of the spine, in reading order (cover first), and the metadata
+  comes from the OPF package: title, creators with their role (writer, artist, colorist…),
+  publisher, date, language, summary, subjects, ISBN, calibre or EPUB 3 series and position. EPUB
+  books can be converted to CBZ/CB7/CBR/PDF; their information stays in the library.
 - Recognized page images: jpg, jpeg, jif, jiff, gif, png, tif, tiff, bmp, webp, heic, heif, avif,
   jp2, j2k, jxl. They are sorted in natural order, and `__MACOSX` is ignored.
 - Reads `ComicInfo.xml` from the archive, or from an XML file next to the book.
@@ -49,7 +53,10 @@ forced in Settings → Library (applied at the next start).
     books appear as they are found.
   - The **Message log** (Ctrl+J, or the "Log" button at the bottom right) details every operation:
     books added, converted or written, and errors. It is also copied to `journal.log` in the cache
-    folder.
+    folder, emptied at each start. A search field (Ctrl+F) highlights the matches; Enter /
+    Shift+Enter (or F3 / Shift+F3) go to the next / previous one; "Errors only" hides the rest.
+- Light or dark appearance in Settings → Library: "System" keeps the desktop theme, "Light" and
+  "Dark" use GTK's built-in theme (desktop themes often have a single variant).
 
 ### Editing book info (Ctrl+I)
 "Info" dialog modelled on ComicRack's, for one or several books.

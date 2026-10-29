@@ -133,4 +133,6 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("{0} folder(s) read — {1}", "{0} dossier(s) lus — {1}"),
     ("{0} file(s) found", "{0} fichier(s) trouvés"),
     ("Unreadable cover image", "Image de couverture illisible"),
+    ("EPUB Document", "Document EPUB"),
+    ("Invalid EPUB: no package document", "EPUB invalide : pas de document de paquetage"),
 ];

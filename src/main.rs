@@ -10,6 +10,7 @@ mod autonumber;
 mod bedetheque;
 mod comicinfo;
 mod convert;
+mod epub;
 mod library;
 mod model;
 mod organizer;

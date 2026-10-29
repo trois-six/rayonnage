@@ -27,6 +27,8 @@ pub struct Settings {
     pub scan_on_startup: bool,
     /// Interface language (applied at the next start).
     pub language: crate::i18n::Language,
+    /// Light / dark appearance.
+    pub theme: crate::ui::theme::Theme,
     /// Remove books whose file disappeared when scanning.
     pub remove_missing: bool,
     /// Folders listed and books read at the same time during a scan (useful
@@ -110,6 +112,7 @@ impl Default for Settings {
             library_folders: Vec::new(),
             scan_on_startup: false,
             language: crate::i18n::Language::Auto,
+            theme: crate::ui::theme::Theme::System,
             remove_missing: true,
             scan_threads: 16,
             allow_write_info: true,

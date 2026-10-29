@@ -8,6 +8,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use super::widgets::{self, Form};
+use super::theme::Theme;
 use crate::i18n::Language;
 use super::{State, refresh_sidebar, scan};
 
@@ -53,7 +54,7 @@ pub fn open(state: &State) {
     page.set_margin_start(12);
     page.set_margin_end(12);
     page.set_margin_top(12);
-    page.append(&gtk::Label::builder().label(t!("Folders scanned for books (cbz, zip, cbr, rar, cb7, 7z, cbt, tar, pdf, djvu):")).xalign(0.0).wrap(true).build());
+    page.append(&gtk::Label::builder().label(t!("Folders scanned for books (cbz, zip, cbr, rar, cb7, 7z, cbt, tar, pdf, djvu, epub):")).xalign(0.0).wrap(true).build());
     page.append(&widgets::scrolled(&list));
     page.append(&add_btn);
     page.append(&scan_startup);
@@ -74,6 +75,12 @@ pub fn open(state: &State) {
     language_row.append(&language);
     language_row.append(&gtk::Label::builder().label(t!("(applies at the next start)")).css_classes(["dim-label"]).build());
     page.append(&language_row);
+    let theme_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let themes = Theme::ALL.map(Theme::label);
+    let theme = widgets::dropdown(&themes, Theme::ALL.iter().position(|t| *t == s.theme).unwrap_or(0));
+    theme_row.append(&gtk::Label::new(Some(t!("Appearance:"))));
+    theme_row.append(&theme);
+    page.append(&theme_row);
     notebook.append_page(&page, Some(&gtk::Label::new(Some(t!("Library")))));
 
     // --- Files
@@ -162,6 +169,8 @@ pub fn open(state: &State) {
                 s.ddjvu_path = ddjvu.text().trim().to_string();
                 s.djvused_path = djvused.text().trim().to_string();
                 s.language = Language::ALL.get(language.selected() as usize).copied().unwrap_or_default();
+                s.theme = Theme::ALL.get(theme.selected() as usize).copied().unwrap_or_default();
+                super::theme::apply(s.theme);
                 let b = custom.buffer();
                 s.custom_fields = b
                     .text(&b.start_iter(), &b.end_iter(), false)
