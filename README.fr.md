@@ -111,6 +111,11 @@ liste, à partir d'un numéro donné, et peut enregistrer le nombre total.
     redimensionnement ; pages doubles (couper, pivoter, adapter) ; luminosité, contraste,
     saturation, gamma, netteté, contraste automatique.
 - Les préréglages personnels sont enregistrables.
+- **Découper des packs en albums…** transforme un pack (une archive contenant plusieurs albums) en
+  un livre par album : chaque archive trouvée dans le pack (cbz, cbr, zip, rar, pdf…) et chaque
+  dossier d'images (avec son ComicInfo.xml) devient un livre, converti en CBZ/CB7/CBR/CBT/PDF ou
+  gardé tel quel. Les albums vont dans un dossier au nom du pack, à côté du pack ou dans un dossier
+  choisi ; ils sont ajoutés à la bibliothèque, et le pack peut être supprimé ensuite.
 
 ### Récupération des infos sur Bedetheque (Ctrl+B)
 Menu → « Récupérer les infos sur Bedetheque » (d'après le plugin Bedetheque Scrapper 2). La

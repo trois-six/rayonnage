@@ -14,6 +14,7 @@ mod epub;
 mod library;
 mod model;
 mod organizer;
+mod packs;
 mod settings;
 mod ui;
 mod util;

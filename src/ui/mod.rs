@@ -12,6 +12,7 @@ mod organizer_ui;
 mod pages_editor;
 mod scraper_ui;
 mod settings_dialog;
+mod split_dialog;
 pub mod theme;
 pub mod widgets;
 
@@ -556,6 +557,7 @@ fn convert_menu() -> gio::Menu {
     m.append(Some(t!("Convert to CB7")), Some("win.convert::cb7"));
     m.append(Some(t!("Convert to CBR")), Some("win.convert::cbr"));
     m.append(Some(t!("Export Books…")), Some("win.export"));
+    m.append(Some(t!("Split Packs into Albums…")), Some("win.split-packs"));
     m
 }
 
@@ -645,6 +647,7 @@ fn build_actions(app: &gtk::Application, state: &State) {
     add("refresh", |st| refresh(st, false));
     add("refresh-force", |st| refresh(st, true));
     add("export", convert_dialog::open);
+    add("split-packs", split_dialog::open);
     add("bd-scrape", scraper_ui::scrape);
     add("bd-quick", scraper_ui::quick_scrape);
     add("organize", organizer_ui::open);

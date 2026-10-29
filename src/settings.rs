@@ -52,6 +52,8 @@ pub struct Settings {
     /// Last custom export settings and user presets.
     pub export: ExportSettings,
     pub export_presets: Vec<ExportSettings>,
+    /// Last options of "Split Packs into Albums".
+    pub split: crate::packs::SplitOptions,
     pub scraper: ScraperSettings,
     pub organizer: OrganizerSettings,
     /// User list of custom value names (Custom tab).
@@ -129,6 +131,7 @@ impl Default for Settings {
             window_height: 800,
             export: ExportSettings::default(),
             export_presets: Vec::new(),
+            split: crate::packs::SplitOptions::default(),
             scraper: ScraperSettings::default(),
             organizer: OrganizerSettings::default(),
             custom_fields: Vec::new(),

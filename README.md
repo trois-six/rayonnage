@@ -107,6 +107,11 @@ starting from a given number, and can store the total count.
     double pages (split, rotate, adapt); brightness, contrast, saturation, gamma, sharpening,
     automatic contrast.
 - Custom presets can be saved.
+- **Split Packs into Albums…** turns a pack (an archive holding several albums) into one book per
+  album: each archive found inside the pack (cbz, cbr, zip, rar, pdf…) and each folder of images
+  (with its ComicInfo.xml) becomes a book, converted to CBZ/CB7/CBR/CBT/PDF or kept as it is. The
+  albums go to a folder named after the pack, next to the pack or to a chosen folder; they are
+  added to the library, and the pack can be deleted afterwards.
 
 ### Fetching book info from Bedetheque (Ctrl+B)
 Books menu → "Fetch Info from Bedetheque" (based on the Bedetheque Scrapper 2 plugin). The
