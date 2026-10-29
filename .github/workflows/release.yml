@@ -13,6 +13,7 @@ permissions:
 jobs:
   linux:
     runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - name: Check that the tag matches the version of Cargo.toml
@@ -29,6 +30,7 @@ jobs:
 
   macos:
     runs-on: macos-14
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - run: brew install gtk4 librsvg adwaita-icon-theme pkgconf dylibbundler
@@ -44,6 +46,7 @@ jobs:
 
   windows:
     runs-on: windows-2022
+    timeout-minutes: 60
     defaults:
       run:
         shell: msys2 {0}

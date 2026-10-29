@@ -12,7 +12,15 @@ BREW="$(brew --prefix)"
 rm -rf "$APP" && mkdir -p "$C/MacOS" "$RES" "$C/libs"
 
 cp target/release/rayonnage "$C/MacOS/rayonnage-bin"
-dylibbundler -od -b -cd -x "$C/MacOS/rayonnage-bin" -d "$C/libs" -p @executable_path/../libs > /dev/null
+
+# Copies the Homebrew libraries a binary needs into Contents/libs and points
+# the binary at them. dylibbundler asks on stdin for a library it cannot find
+# and asks again forever at end of file: it is given the Homebrew library
+# folder to search, and "quit" as every answer, so that it fails instead.
+bundle() {
+    dylibbundler "$@" -b -cd -d "$C/libs" -p @executable_path/../libs -s "$BREW/lib" < <(yes quit)
+}
+bundle -od -x "$C/MacOS/rayonnage-bin"
 
 # Image loaders (SVG icons...); their cache is written at launch with the
 # real location of the application.
@@ -21,7 +29,7 @@ mkdir -p "$RES/$LOADERS"
 shopt -s nullglob
 cp "$BREW/$LOADERS"/*.so "$RES/$LOADERS/"
 for l in "$RES/$LOADERS"/*.so; do
-    dylibbundler -of -b -cd -x "$l" -d "$C/libs" -p @executable_path/../libs > /dev/null
+    bundle -of -x "$l"
 done
 GDK_PIXBUF_MODULEDIR="$BREW/$LOADERS" gdk-pixbuf-query-loaders \
     | sed "s|$BREW/$LOADERS|@RES@/$LOADERS|g" > "$RES/lib/gdk-pixbuf-2.0/2.10.0/loaders.cache.in"

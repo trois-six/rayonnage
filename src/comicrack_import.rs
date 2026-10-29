@@ -634,7 +634,8 @@ mod tests {
         assert_eq!(p.exclude_rules.operator, GroupOp::All);
         assert_eq!(p.exclude_rules.items.len(), 2);
         assert_eq!(map_path(&p.base_folder, &[("X:\\".into(), "/home/me/temp".into())]), "/home/me/temp");
-        assert_eq!(map_path("x:\\Temp\\A", &[("X:\\".into(), "/m".into())]), "/m/Temp/A");
+        // The local part is joined with the native separator (`\` on Windows).
+        assert_eq!(map_path("x:\\Temp\\A", &[("X:\\".into(), "/m".into())]).replace('\\', "/"), "/m/Temp/A");
     }
 
     #[test]
