@@ -1,0 +1,33 @@
+//! Rayonnage: a ComicRack CE-like library manager for comics, BD and mangas.
+
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
+#[macro_use]
+mod i18n;
+mod archive;
+mod autonumber;
+
+mod bedetheque;
+mod comicinfo;
+mod convert;
+mod library;
+mod model;
+mod organizer;
+mod settings;
+mod ui;
+mod util;
+
+use gtk::prelude::*;
+
+fn main() -> gtk::glib::ExitCode {
+    library::migrate_old_dirs();
+    i18n::init(settings::Settings::load_language());
+    let app = gtk::Application::builder().application_id(ui::APP_ID).build();
+    // Screenshot runs (development) must not hand over to a running instance.
+    #[cfg(debug_assertions)]
+    if std::env::var_os("BO_SHOT").is_some() {
+        app.set_flags(gtk::gio::ApplicationFlags::NON_UNIQUE);
+    }
+    app.connect_activate(ui::build_ui);
+    app.run()
+}
