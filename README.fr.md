@@ -32,6 +32,13 @@ et [Library Organizer](https://github.com/Stonepaw/comicrack-library-organizer).
   - Colonnes triables, redimensionnables et déplaçables ; le choix des colonnes se fait via Menu → Colonnes….
   - « Valeurs proposées » : quand la série et le numéro sont vides, ils sont déduits du nom du fichier
     et affichés en grisé, comme dans ComicRack.
+  - Édition directe dans le tableau, comme dans ComicRack : un clic lent sur une cellule de la
+    ligne sélectionnée (ou F2) l'édite, avec des suggestions tirées de toute la bibliothèque.
+    Tab / Maj+Tab passent à la colonne éditable suivante / précédente, ↑ / ↓ à la ligne
+    suivante / précédente, Entrée valide, Échap annule. La valeur s'applique à tous les livres
+    sélectionnés ; modifier le nom de fichier renomme le fichier.
+  - Les colonnes numériques (numéro, volume, nombre, année, mois, jour…) des lignes sélectionnées
+    ont des boutons ▲▼ pour incrémenter ou décrémenter la valeur.
   - Recherche rapide (Ctrl+F), filtre par dossier et par « infos non enregistrées » dans la barre
     latérale.
   - Panneau d'information avec la couverture.

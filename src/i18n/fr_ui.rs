@@ -200,4 +200,9 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Start at number:", "Commencer au numéro :"),
     ("Renumber", "Numéroter"),
     ("{0} book(s) numbered", "{0} livre(s) numéroté(s)"),
+    ("Invalid number for {0}: {1}", "Nombre invalide pour {0} : {1}"),
+    ("Invalid file name: {0}", "Nom de fichier invalide : {0}"),
+    ("A file named {0} already exists", "Un fichier nommé {0} existe déjà"),
+    ("Rename", "Renommer"),
+    ("Renamed: {0} → {1}", "Renommé : {0} → {1}"),
 ];

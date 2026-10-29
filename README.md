@@ -36,6 +36,12 @@ forced in Settings → Library (applied at the next start).
     immediately. Visible columns are chosen in Menu → Columns….
   - "Proposed values": when the series and number are empty, they are guessed from the file name
     and shown greyed out, as in ComicRack.
+  - In-place editing, as in ComicRack: a slow click on a cell of the selected row (or F2) edits
+    it, with suggestions taken from the whole library. Tab / Shift+Tab move to the next /
+    previous editable column, Up / Down to the next / previous row, Enter validates, Escape
+    cancels. The value applies to all the selected books; editing the file name renames the file.
+  - Numeric columns (number, volume, count, year, month, day…) of the selected rows have up/down
+    buttons to increment or decrement the value.
   - Quick search (Ctrl+F), filter by folder and by "unsaved info" in the sidebar.
   - Information panel with the cover.
 - Activity feedback:

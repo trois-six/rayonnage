@@ -6,6 +6,7 @@ mod columns_dialog;
 mod convert_dialog;
 mod edit_dialog;
 mod icons;
+mod inline_edit;
 mod journal;
 mod organizer_ui;
 mod scraper_ui;
@@ -23,7 +24,7 @@ use gtk::{gdk, gio, glib};
 
 use crate::archive;
 use crate::library::{self, Library, ScanEvent};
-use crate::model::{Book, Field, FieldKind, default_book_cmp};
+use crate::model::{Book, Field, default_book_cmp};
 use crate::settings::Settings;
 pub use book_object::BookObject;
 
@@ -63,6 +64,7 @@ pub struct AppState {
     info_text: gtk::Label,
     info_generation: Cell<u64>,
     pub journal: journal::Journal,
+    inline: inline_edit::Inline,
 }
 
 pub type State = Rc<AppState>;
@@ -153,6 +155,7 @@ pub fn build_ui(app: &gtk::Application) {
         info_text,
         info_generation: Cell::new(0),
         journal: journal::Journal::new(),
+        inline: inline_edit::Inline::default(),
     });
 
     // Filter: sidebar source + quick search.
@@ -168,6 +171,7 @@ pub fn build_ui(app: &gtk::Application) {
         source_ok && matches_search(&b, &st.search_text.borrow())
     });
 
+    inline_edit::install_css();
     build_columns(&state);
     watch_columns(&state);
     fill_store(&state);
@@ -270,7 +274,7 @@ fn fill_store(state: &State) {
 fn build_columns(state: &State) {
     let cols = state.settings.borrow().columns.clone();
     for c in cols {
-        let col = make_column(c.field);
+        let col = inline_edit::make_column(state, c.field);
         col.set_visible(c.visible);
         col.set_fixed_width(c.width);
         state.column_view.append_column(&col);
@@ -287,63 +291,6 @@ fn build_columns(state: &State) {
         };
         state.column_view.sort_by_column(Some(col), dir);
     }
-}
-
-fn make_column(field: Field) -> gtk::ColumnViewColumn {
-    let factory = gtk::SignalListItemFactory::new();
-    let numeric = matches!(field.kind(), FieldKind::Int | FieldKind::Number)
-        || matches!(field, Field::FileSize | Field::ReadPercentage);
-    factory.connect_setup(move |_, item| {
-        let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-        let label = gtk::Label::builder()
-            .xalign(if numeric { 1.0 } else { 0.0 })
-            .ellipsize(gtk::pango::EllipsizeMode::End)
-            .single_line_mode(true)
-            .use_markup(true)
-            .build();
-        item.set_child(Some(&label));
-    });
-    factory.connect_bind(move |_, item| {
-        let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-        let obj = item.item().and_downcast::<BookObject>().unwrap();
-        let label = item.child().and_downcast::<gtk::Label>().unwrap();
-        let binding = obj
-            .bind_property("revision", &label, "label")
-            .transform_to(move |b, _: u64| {
-                let o = b.source()?.downcast::<BookObject>().ok()?;
-                let book = o.book();
-                let v = match field.proposed(&book) {
-                    Some(p) => format!("<span alpha=\"55%\"><i>{}</i></span>", glib::markup_escape_text(&p)),
-                    None => glib::markup_escape_text(&field.display(&book)).to_string(),
-                };
-                Some(v)
-            })
-            .sync_create()
-            .build();
-        // SAFETY: the key is only ever used with a `glib::Binding`.
-        unsafe { label.set_data("binding", binding) };
-    });
-    factory.connect_unbind(|_, item| {
-        let item = item.downcast_ref::<gtk::ListItem>().unwrap();
-        if let Some(label) = item.child().and_downcast::<gtk::Label>() {
-            // SAFETY: same type as stored in bind.
-            if let Some(b) = unsafe { label.steal_data::<glib::Binding>("binding") } {
-                b.unbind();
-            }
-        }
-    });
-    let col = gtk::ColumnViewColumn::new(Some(field.label()), Some(factory));
-    col.set_id(Some(field.key()));
-    col.set_resizable(true);
-    col.set_sorter(Some(&gtk::CustomSorter::new(move |a, b| {
-        let a = a.downcast_ref::<BookObject>().unwrap();
-        let b = b.downcast_ref::<BookObject>().unwrap();
-        field.compare(&a.book(), &b.book()).into()
-    })));
-    if field == Field::Modified {
-        col.set_title(Some("✎"));
-    }
-    col
 }
 
 /// Saves the column layout as soon as the user changes it: order (drag and
@@ -702,6 +649,7 @@ fn build_actions(app: &gtk::Application, state: &State) {
         st.selection.select_all();
     });
     add("about", about);
+    add("inline-edit", inline_edit::edit_selection);
     add("journal", |st| st.journal.open(&st.window));
 
     let convert = gio::SimpleAction::new("convert", Some(glib::VariantTy::STRING));
@@ -720,6 +668,7 @@ fn build_actions(app: &gtk::Application, state: &State) {
     win.add_action(&convert);
 
     app.set_accels_for_action("win.scan", &["F5"]);
+    app.set_accels_for_action("win.inline-edit", &["F2"]);
     app.set_accels_for_action("win.journal", &["<Control>j"]);
     app.set_accels_for_action("win.edit", &["<Control>i"]);
     app.set_accels_for_action("win.settings", &["<Control>comma"]);
@@ -1436,11 +1385,20 @@ fn debug_screenshots(state: &State) {
     let Ok(prefix) = std::env::var("BO_SHOT") else { return };
     let win = state.window.clone();
     let actions = std::env::var("BO_ACTIONS").unwrap_or_default();
-    glib::timeout_add_local_once(std::time::Duration::from_millis(2500), glib::clone!(
-        #[weak]
-        win,
-        move || {
-            for a in actions.split(',').filter(|a| !a.is_empty()) {
+    // Actions run one after the other, 400 ms apart.
+    for (i, a) in actions.split(',').filter(|a| !a.is_empty()).map(str::to_string).enumerate() {
+        let delay = std::time::Duration::from_millis(2500 + 400 * i as u64);
+        glib::timeout_add_local_once(delay, glib::clone!(
+            #[weak]
+            win,
+            move || {
+                let a = a.as_str();
+                if a.starts_with("select:") || a.starts_with("type:") || a.starts_with("key:") {
+                    if let Some(st) = win.data_state() {
+                        inline_edit::debug_action(&st, a);
+                    }
+                    return;
+                }
                 // "move-col:Title" simulates dragging a column header to the first place.
                 if let Some(key) = a.strip_prefix("move-col:") {
                     if let Some(st) = win.data_state()
@@ -1448,7 +1406,7 @@ fn debug_screenshots(state: &State) {
                     {
                         st.column_view.insert_column(0, col);
                     }
-                    continue;
+                    return;
                 }
                 let (name, param) = match a.split_once(':') {
                     Some((n, p)) => (n, Some(p.to_variant())),
@@ -1456,8 +1414,8 @@ fn debug_screenshots(state: &State) {
                 };
                 let _ = WidgetExt::activate_action(&win, &format!("win.{name}"), param.as_ref());
             }
-        }
-    ));
+        ));
+    }
     let delay = std::env::var("BO_SHOT_DELAY").ok().and_then(|d| d.parse().ok()).unwrap_or(5000);
     glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
         let windows = gtk::Window::list_toplevels();
