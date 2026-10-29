@@ -23,13 +23,13 @@ mod util;
 use gtk::prelude::*;
 
 fn main() -> gtk::glib::ExitCode {
-    // GTK's Vulkan renderer takes seconds to shut down after a long session
-    // (measured with an NVIDIA driver): use its OpenGL renderer, unless the
-    // user chose one.
+    // GTK renderer on Linux, unless the user chose one with GSK_RENDERER.
+    // ("ngl", the OpenGL renderer, closes faster than Vulkan with some
+    // NVIDIA drivers.)
     #[cfg(target_os = "linux")]
     if std::env::var_os("GSK_RENDERER").is_none() {
         // SAFETY: no other thread runs yet.
-        unsafe { std::env::set_var("GSK_RENDERER", "ngl") };
+        unsafe { std::env::set_var("GSK_RENDERER", "vulkan") };
     }
     library::migrate_old_dirs();
     i18n::init(settings::Settings::load_language());

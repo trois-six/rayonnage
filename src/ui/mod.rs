@@ -74,7 +74,23 @@ pub struct AppState {
 
 pub type State = Rc<AppState>;
 
+/// Installs the application icon (assets/rayonnage.png) in an icon theme
+/// folder of the cache, so that windows and the About dialog show it.
+fn install_icon() {
+    const ICON: &[u8] = include_bytes!("../../assets/rayonnage.png");
+    let base = library::cache_dir().join("icons");
+    let file = base.join("hicolor/256x256/apps").join(format!("{APP_ID}.png"));
+    if std::fs::read(&file).map(|d| d != ICON).unwrap_or(true) {
+        let _ = library::write_atomic(&file, ICON);
+    }
+    if let Some(display) = gdk::Display::default() {
+        gtk::IconTheme::for_display(&display).add_search_path(&base);
+    }
+    gtk::Window::set_default_icon_name(APP_ID);
+}
+
 pub fn build_ui(app: &gtk::Application) {
+    install_icon();
     let settings = Settings::load();
     let library = Library::load();
 
@@ -1446,6 +1462,7 @@ fn about(state: &State) {
         .transient_for(&state.window)
         .modal(true)
         .program_name("Rayonnage")
+        .logo_icon_name(APP_ID)
         .version(env!("CARGO_PKG_VERSION"))
         .comments(t!("Comics, BD and manga library manager inspired by ComicRack CE."))
         .license_type(gtk::License::MitX11)

@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <title>Rayonnage</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#24476f"/>
+      <stop offset="1" stop-color="#132a45"/>
+    </linearGradient>
+    <linearGradient id="plank" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e9b980"/>
+      <stop offset="1" stop-color="#c98d4f"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#bg)"/>
+
+  <!-- Speech bubble, for the comics -->
+  <path d="M77 15h30a8 8 0 0 1 8 8v13a8 8 0 0 1-8 8h-17l-9 8 1-8h-5a8 8 0 0 1-8-8V23a8 8 0 0 1 8-8z" fill="#ffffff"/>
+  <circle cx="83" cy="29.5" r="3.2" fill="#24476f"/>
+  <circle cx="92" cy="29.5" r="3.2" fill="#24476f"/>
+  <circle cx="101" cy="29.5" r="3.2" fill="#24476f"/>
+
+  <!-- Books on the shelf -->
+  <g>
+    <rect x="18" y="44" width="15" height="52" rx="2.5" fill="#f97316"/>
+    <rect x="18" y="52" width="15" height="5" fill="#ffffff" opacity=".75"/>
+    <rect x="18" y="82" width="15" height="3" fill="#7c2d12" opacity=".45"/>
+
+    <rect x="35" y="36" width="13" height="60" rx="2.5" fill="#facc15"/>
+    <rect x="35" y="44" width="13" height="5" fill="#ffffff" opacity=".75"/>
+    <rect x="35" y="84" width="13" height="3" fill="#713f12" opacity=".45"/>
+
+    <rect x="50" y="50" width="16" height="46" rx="2.5" fill="#ef4444"/>
+    <rect x="50" y="58" width="16" height="5" fill="#ffffff" opacity=".75"/>
+    <rect x="50" y="84" width="16" height="3" fill="#7f1d1d" opacity=".45"/>
+
+    <rect x="68" y="56" width="13" height="40" rx="2.5" fill="#14b8a6"/>
+    <rect x="68" y="63" width="13" height="5" fill="#ffffff" opacity=".75"/>
+    <rect x="68" y="85" width="13" height="3" fill="#134e4a" opacity=".45"/>
+
+    <!-- A leaning book -->
+    <g transform="rotate(18 97 96)">
+      <rect x="84" y="50" width="15" height="46" rx="2.5" fill="#a78bfa"/>
+      <rect x="84" y="58" width="15" height="5" fill="#ffffff" opacity=".75"/>
+      <rect x="84" y="84" width="15" height="3" fill="#4c1d95" opacity=".45"/>
+    </g>
+  </g>
+
+  <!-- Shelf -->
+  <rect x="12" y="96" width="104" height="9" rx="3" fill="url(#plank)"/>
+  <rect x="12" y="105" width="104" height="3" rx="1.5" fill="#000000" opacity=".25"/>
+</svg>

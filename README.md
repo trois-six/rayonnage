@@ -1,6 +1,12 @@
-# Rayonnage
+<p align="center">
+  <img src="assets/logo.svg" width="128" height="128" alt="Rayonnage logo: comic books on a shelf">
+</p>
 
-*[Version française](README.fr.md)*
+<h1 align="center">Rayonnage</h1>
+
+<p align="center">
+  Organize, tag, convert and file your comics, BD and mangas.
+</p>
 
 Comic, BD and manga library manager in Rust + GTK 4 (Linux, Windows, macOS).
 It reproduces part of [ComicRack CE](https://github.com/maforget/ComicRackCE), together with the
@@ -180,9 +186,9 @@ cargo build --release
 
 The `.github/workflows/ci.yml` workflow builds and tests the application on the three systems.
 
-On Linux, Rayonnage uses GTK's OpenGL renderer: with some drivers (NVIDIA), the Vulkan renderer
-that GTK picks by default takes several seconds to shut down when the application closes. Set
-`GSK_RENDERER` (for example `GSK_RENDERER=vulkan`) to choose another one.
+On Linux, Rayonnage uses GTK's Vulkan renderer unless `GSK_RENDERER` is set. With some drivers
+(NVIDIA), it can take a few seconds to shut down when the application closes; `GSK_RENDERER=ngl`
+(GTK's OpenGL renderer) closes at once.
 
 ### External programs (optional)
 Their paths are set in Settings → Files.
