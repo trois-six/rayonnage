@@ -5,6 +5,7 @@ mod book_object;
 mod columns_dialog;
 mod convert_dialog;
 mod edit_dialog;
+mod icons;
 mod journal;
 mod organizer_ui;
 mod scraper_ui;
@@ -424,17 +425,17 @@ fn build_layout(state: &State) -> gtk::Box {
         .action_name("win.update-files")
         .build();
     let convert_btn = gtk::MenuButton::builder()
-        .icon_name("emblem-synchronizing-symbolic")
+        .child(&icons::icon(icons::Icon::Convert))
         .tooltip_text(t!("Convert"))
         .menu_model(&convert_menu())
         .build();
     let scrape_btn = gtk::Button::builder()
-        .icon_name("system-search-symbolic")
+        .child(&icons::icon(icons::Icon::Scraper))
         .tooltip_text("Bedetheque Scraper 2")
         .action_name("win.bd-scrape")
         .build();
     let organize_btn = gtk::Button::builder()
-        .icon_name("folder-symbolic")
+        .child(&icons::icon(icons::Icon::Organizer))
         .tooltip_text("Library Organizer")
         .action_name("win.organize")
         .build();

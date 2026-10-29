@@ -3170,7 +3170,7 @@ mod tests {
         p.folder_template = "{<imprint>}".into();
         let out = preview(&b, &lib, &p);
         assert!(
-            out.starts_with(&path_str(&b.file_path)) && out.ends_with("Imprint is empty."),
+            out.starts_with(&path_str(&b.file_path).replace('\\', "/")) && out.ends_with("Imprint is empty."),
             "{out}"
         );
         p.move_failed = true;
