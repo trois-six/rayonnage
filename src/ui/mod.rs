@@ -9,6 +9,7 @@ mod icons;
 mod inline_edit;
 mod journal;
 mod organizer_ui;
+mod pages_editor;
 mod scraper_ui;
 mod settings_dialog;
 pub mod theme;

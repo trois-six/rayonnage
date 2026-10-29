@@ -10,7 +10,7 @@ use gtk::{gdk, glib};
 
 use super::widgets;
 use super::{BookObject, State};
-use crate::model::{Book, Field, FieldKind, PAGE_TYPES, PageInfo};
+use crate::model::{Book, Field, FieldKind};
 
 /// Marker shown when the selected books have different values.
 fn mixed_label() -> &'static str {
@@ -436,42 +436,12 @@ fn show(state: &State, books: Vec<Book>) {
     cbox.append(&add_btn);
     notebook.append_page(&page(&cbox), Some(&gtk::Label::new(Some(t!("Custom")))));
 
-    // --- Pages (single book)
-    let page_types: Rc<RefCell<Vec<(gtk::DropDown, gtk::Entry)>>> = Rc::new(RefCell::new(Vec::new()));
-    let pages_changed = Rc::new(Cell::new(false));
-    if !multi && first.info.page_count > 0 {
-        let pbox = gtk::ListBox::new();
-        let type_labels: Vec<&str> = PAGE_TYPES.iter().map(|t| page_type_label(t)).collect();
-        for i in 0..first.info.page_count {
-            let pinfo = first.info.pages.iter().find(|p| p.image == i).cloned().unwrap_or_default();
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-            row.set_margin_start(12);
-            row.set_margin_end(12);
-            row.append(&gtk::Label::builder().label(t!("Page {0}", i + 1)).width_chars(10).xalign(0.0).build());
-            let t = if pinfo.page_type.is_empty() { "Story" } else { pinfo.page_type.as_str() };
-            let dd = widgets::dropdown(&type_labels, PAGE_TYPES.iter().position(|x| *x == t).unwrap_or(3));
-            let c = pages_changed.clone();
-            dd.connect_selected_notify(move |_| c.set(true));
-            let bm = gtk::Entry::builder().text(&pinfo.bookmark).placeholder_text(t!("Bookmark")).hexpand(true).build();
-            let c = pages_changed.clone();
-            bm.connect_changed(move |_| c.set(true));
-            row.append(&dd);
-            row.append(&bm);
-            pbox.append(&row);
-            page_types.borrow_mut().push((dd, bm));
-        }
-        let pp = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        pp.append(
-            &gtk::Label::builder()
-                .label(t!("Type of each page (\"Deleted\" pages can be removed during a conversion):"))
-                .xalign(0.0)
-                .margin_start(12)
-                .margin_top(12)
-                .build(),
-        );
-        pp.append(&page(&pbox));
-        notebook.append_page(&pp, Some(&gtk::Label::new(Some(t!("Pages")))));
-    }
+    // --- Pages (single book linked to a file)
+    let pages_editor = (!multi && first.info.page_count > 0).then(|| {
+        let ed = super::pages_editor::PagesEditor::new(&first);
+        notebook.append_page(&ed.widget, Some(&gtk::Label::new(Some(t!("Pages")))));
+        ed
+    });
 
     // --- Buttons
     let apply: Rc<dyn Fn() -> bool> = {
@@ -479,8 +449,7 @@ fn show(state: &State, books: Vec<Book>) {
         let st = state.clone();
         let books = books.clone();
         let custom_entries = custom_entries.clone();
-        let page_types = page_types.clone();
-        let pages_changed = pages_changed.clone();
+        let pages_editor = pages_editor.clone();
         Rc::new(move || {
             // Validation
             for fe in ed.list.borrow().iter().filter(|fe| fe.changed.get()) {
@@ -524,14 +493,7 @@ fn show(state: &State, books: Vec<Book>) {
                         }
                     }
                 }
-                if pages_changed.get() {
-                    let mut pages = Vec::new();
-                    for (i, (dd, bm)) in page_types.borrow().iter().enumerate() {
-                        let mut p = nb.info.pages.iter().find(|p| p.image == i as i32).cloned().unwrap_or(PageInfo { image: i as i32, ..Default::default() });
-                        p.page_type = PAGE_TYPES[dd.selected() as usize].to_string();
-                        p.bookmark = bm.text().trim().to_string();
-                        pages.push(p);
-                    }
+                if let Some(pages) = pages_editor.as_ref().and_then(|ed| ed.pages()) {
                     nb.info.pages = pages;
                     changed_info = true;
                 }

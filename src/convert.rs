@@ -386,28 +386,30 @@ struct OutPage {
 
 /// Selects and transforms the pages of one book.
 fn process_pages(book: &Book, s: &ExportSettings, out: &mut Vec<OutPage>) -> Result<()> {
-    let pages = archive::read_pages(&book.file_path)?;
+    let mut pages: Vec<Option<Page>> = archive::read_pages(&book.file_path)?.into_iter().map(Some).collect();
     let ranges = page_ranges(&s.include_pages);
     let rtl = book.info.manga == Manga::YesAndRightToLeft;
-    for (idx, page) in pages.into_iter().enumerate() {
-        let pinfo = book
-            .info
-            .pages
-            .iter()
-            .find(|p| p.image as usize == idx)
-            .cloned()
-            .unwrap_or_else(|| PageInfo { page_type: "Story".into(), ..Default::default() });
+    // Pages in the order set in the book info (ComicRack's page order).
+    let sequence = crate::model::page_sequence(&book.info, pages.len());
+    for (pos, mut pinfo) in sequence.into_iter().enumerate() {
+        let Some(page) = pages.get_mut(pinfo.image as usize).and_then(Option::take) else { continue };
+        if pinfo.page_type.is_empty() {
+            pinfo.page_type = "Story".into();
+        }
         if s.remove_pages && s.remove_page_types.iter().any(|t| t == &pinfo.page_type) {
             continue;
         }
-        if !ranges.is_empty() && !ranges.iter().any(|(a, b)| (*a..=*b).contains(&(idx + 1))) {
+        if !ranges.is_empty() && !ranges.iter().any(|(a, b)| (*a..=*b).contains(&(pos + 1))) {
             continue;
         }
         let ext = Path::new(&page.name)
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "jpg".into());
-        if !s.needs_image_processing() {
+        // A permanent page rotation is applied to the image.
+        let rotation = std::mem::take(&mut pinfo.rotation);
+        let rotate = matches!(rotation.as_str(), "Rotate90" | "Rotate180" | "Rotate270");
+        if !s.needs_image_processing() && !rotate {
             out.push(OutPage { page, info: pinfo });
             continue;
         }
@@ -427,6 +429,12 @@ fn process_pages(book: &Book, s: &ExportSettings, out: &mut Vec<OutPage>) -> Res
             .or_else(|| ImageFormat::from_extension(&ext).map(|f| (f, "")))
             .unwrap_or((ImageFormat::Jpeg, "jpg"));
         let target_ext = if target_ext.is_empty() { ext.clone() } else { target_ext.to_string() };
+        let img = match rotation.as_str() {
+            "Rotate90" => img.rotate90(),
+            "Rotate180" => img.rotate180(),
+            "Rotate270" => img.rotate270(),
+            _ => img,
+        };
         let double = img.width() > img.height();
         let parts: Vec<DynamicImage> = match (double, s.double_pages) {
             (true, DoublePages::Split) => {
@@ -612,6 +620,24 @@ mod tests {
         let info = c.info.unwrap();
         assert_eq!(info.series, "Série");
         assert_eq!(info.tags, "converti");
+    }
+
+    #[test]
+    fn export_follows_page_order_and_rotation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut b = make_book(dir.path());
+        // Second image first, rotated by 90° (40×20 becomes 20×40).
+        b.info.pages = vec![
+            PageInfo { image: 1, page_type: "Story".into(), rotation: "Rotate90".into(), ..Default::default() },
+            PageInfo { image: 0, page_type: "Story".into(), ..Default::default() },
+        ];
+        let s = ExportSettings { target: Target::NewFolder, target_folder: dir.path().join("out").display().to_string(), ..Default::default() };
+        let r = export(std::slice::from_ref(&b), &s, 0).unwrap();
+        let pages = archive::read_pages(&r.new_path).unwrap();
+        assert_eq!(pages.len(), 2);
+        let first = image::load_from_memory(&pages[0].data).unwrap();
+        assert_eq!((first.width(), first.height()), (20, 40));
+        assert!(r.info.pages.iter().all(|p| p.rotation.is_empty()));
     }
 
     #[test]

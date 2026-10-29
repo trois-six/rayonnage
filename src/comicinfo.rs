@@ -203,6 +203,7 @@ fn parse_page(e: &quick_xml::events::BytesStart) -> PageInfo {
             "ImageWidth" => p.image_width = v.parse().unwrap_or(0),
             "ImageHeight" => p.image_height = v.parse().unwrap_or(0),
             "Rotation" => p.rotation = v,
+            "PagePosition" => p.position = v,
             _ => {}
         }
     }
@@ -266,6 +267,9 @@ pub fn to_xml(info: &ComicInfo) -> String {
             }
             if !p.rotation.is_empty() && p.rotation != "None" {
                 s.push_str(&format!(" Rotation=\"{}\"", escape(&p.rotation)));
+            }
+            if !p.position.is_empty() && p.position != "Default" {
+                s.push_str(&format!(" PagePosition=\"{}\"", escape(&p.position)));
             }
             s.push_str(" />\n");
         }

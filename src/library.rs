@@ -455,11 +455,14 @@ pub fn thumbnail(book: &Book, max: u32) -> Result<Vec<u8>> {
     book.file_size.hash(&mut h);
     book.file_modified.map(|d| d.timestamp()).hash(&mut h);
     max.hash(&mut h);
+    // The cover is the first front cover of the page order (ComicRack).
+    let cover = crate::model::cover_index(&book.info, book.info.page_count.max(1) as usize);
+    cover.hash(&mut h);
     let cache = cache_dir().join("thumbnails").join(format!("{:016x}.png", h.finish()));
     if let Ok(d) = std::fs::read(&cache) {
         return Ok(d);
     }
-    let page = archive::read_cover(&book.file_path)?;
+    let page = archive::read_page(&book.file_path, cover).or_else(|_| archive::read_cover(&book.file_path))?;
     let img = image::load_from_memory(&page.data).context(t!("Unreadable cover image"))?;
     let thumb = img.thumbnail(max, max);
     let mut buf = std::io::Cursor::new(Vec::new());

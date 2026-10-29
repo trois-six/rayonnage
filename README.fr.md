@@ -68,7 +68,13 @@ Boîte « Informations » sur le modèle de ComicRack, pour un ou plusieurs livr
   - **Intrigue et notes** : résumé, notes, critique, personnages, équipes, lieux.
   - **Catalogue** : ISBN, prix, état, propriétaire…
   - **Personnalisé** : valeurs libres.
-  - **Pages** : type de chaque page et signets.
+  - **Pages** : comme dans ComicRack, la liste des pages avec vignette, poids, dimensions et nom,
+    et un aperçu. L'ordre se change par glisser-déposer. Le menu contextuel règle le type de page,
+    la rotation, la position (défaut/proche/éloignée) et le signet ; il permet aussi de déplacer
+    les pages en tête ou à la fin, de les marquer comme supprimées (Suppr), de rétablir ou trier
+    l'ordre (par nom, alphabétique ou numérique), de tout sélectionner / inverser la sélection et
+    de copier une page. L'ordre est enregistré dans ComicInfo.xml ; les conversions le suivent,
+    appliquent les rotations et retirent les pages supprimées.
 - En multi-sélection, seuls les champs modifiés sont appliqués.
 - Des suggestions sont tirées des valeurs déjà présentes dans la bibliothèque.
 - Boutons Précédent/Suivant.

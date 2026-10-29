@@ -95,6 +95,50 @@ pub struct PageInfo {
     pub image_height: i32,
     /// None, Rotate90, Rotate180, Rotate270
     pub rotation: String,
+    /// Layout position of a page shown side by side: Default, Near, Far.
+    pub position: String,
+}
+
+pub const ROTATIONS: &[&str] = &["None", "Rotate90", "Rotate180", "Rotate270"];
+pub const PAGE_POSITIONS: &[&str] = &["Default", "Near", "Far"];
+
+/// Pages in reading order. As in ComicRack, the order is the order of the
+/// `<Page>` entries of ComicInfo.xml and `image` is the index of the image in
+/// the file; images without an entry follow, in file order.
+pub fn page_sequence(info: &ComicInfo, page_count: usize) -> Vec<PageInfo> {
+    let mut seen = vec![false; page_count];
+    let mut out = Vec::with_capacity(page_count);
+    for p in &info.pages {
+        let i = p.image;
+        if i >= 0 && (i as usize) < page_count && !seen[i as usize] {
+            seen[i as usize] = true;
+            out.push(p.clone());
+        }
+    }
+    for (i, done) in seen.iter().enumerate() {
+        if !done {
+            out.push(PageInfo { image: i as i32, page_type: "Story".into(), ..Default::default() });
+        }
+    }
+    out
+}
+
+/// Image index of the cover, as ComicRack: among the front cover pages of
+/// the sequence, the one chosen by `PreferredFrontCover` (the first by
+/// default); without front cover, the first page that is not "Other".
+pub fn cover_index(info: &ComicInfo, page_count: usize) -> usize {
+    let seq = page_sequence(info, page_count.max(1));
+    let covers: Vec<&PageInfo> = seq.iter().filter(|p| p.page_type == "FrontCover").collect();
+    if !covers.is_empty() {
+        let preferred = info
+            .extra
+            .iter()
+            .find(|(k, _)| k == "PreferredFrontCover")
+            .and_then(|(_, v)| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        return covers[preferred.min(covers.len() - 1)].image.max(0) as usize;
+    }
+    seq.iter().find(|p| p.page_type != "Other").map(|p| p.image.max(0) as usize).unwrap_or(0)
 }
 
 pub const PAGE_TYPES: &[&str] = &[
@@ -933,6 +977,27 @@ mod tests {
         assert_eq!((p.series.as_str(), p.number.as_str()), ("Asterix", "5"));
         let p = propose_from_filename("Les Schtroumpfs");
         assert_eq!((p.series.as_str(), p.number.as_str()), ("Les Schtroumpfs", ""));
+    }
+
+    #[test]
+    fn page_order_and_cover() {
+        let mut info = ComicInfo {
+            pages: vec![
+                PageInfo { image: 2, page_type: "Story".into(), ..Default::default() },
+                PageInfo { image: 0, page_type: "Deleted".into(), ..Default::default() },
+            ],
+            ..Default::default()
+        };
+        let seq: Vec<i32> = page_sequence(&info, 4).iter().map(|p| p.image).collect();
+        assert_eq!(seq, [2, 0, 1, 3]);
+        assert_eq!(cover_index(&info, 4), 2);
+        info.pages[1].page_type = "FrontCover".into();
+        assert_eq!(cover_index(&info, 4), 0);
+        info.pages[0].page_type = "FrontCover".into();
+        info.extra.push(("PreferredFrontCover".into(), "1".into()));
+        assert_eq!(cover_index(&info, 4), 0);
+        info.extra[0].1 = "0".into();
+        assert_eq!(cover_index(&info, 4), 2);
     }
 
     #[test]

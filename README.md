@@ -66,7 +66,12 @@ forced in Settings → Library (applied at the next start).
   - **Plot & Notes**: summary, notes, review, characters, teams, locations.
   - **Catalog**: ISBN, price, condition, owner…
   - **Custom**: free values.
-  - **Pages**: type of each page and bookmarks.
+  - **Pages**: as in ComicRack, a list of the pages with thumbnail, size, dimensions and name, plus
+    a preview. The order is changed by drag and drop. The context menu sets the page type,
+    rotation, position (default/near/far) and bookmark; it can also move pages to the top or
+    bottom, mark them as deleted (Delete), reset or sort the order (by name, alphabetical or
+    numeric), select all / invert the selection and copy a page. The order is stored in
+    ComicInfo.xml; conversions follow it, apply the rotations and drop the deleted pages.
 - With several books selected, only the modified fields are applied.
 - Suggestions come from the values already present in the library.
 - Previous/Next buttons.

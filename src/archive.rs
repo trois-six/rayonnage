@@ -316,6 +316,9 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
             BookContent { page_count: pages, info }
         }
         BookFormat::Rar => {
+            if let Some(content) = rar_content_single_pass(path)? {
+                return Ok(content);
+            }
             let names = rar_list(path)?;
             let pages = names.iter().filter(|n| is_image_name(n)).count();
             let info = if names.iter().any(|n| is_comicinfo_name(n)) {
@@ -451,9 +454,14 @@ pub fn read_pages(path: &Path) -> Result<Vec<Page>> {
 
 /// Reads the first page (the cover).
 pub fn read_cover(path: &Path) -> Result<Page> {
-    read_pages_filtered(path, Some(1))?
+    read_page(path, 0)
+}
+
+/// Reads the image number `index` of the file (file order).
+pub fn read_page(path: &Path, index: usize) -> Result<Page> {
+    read_pages_filtered(path, Some(index + 1))?
         .into_iter()
-        .next()
+        .nth(index)
         .ok_or_else(|| anyhow!(t!("No page found")))
 }
 
@@ -592,6 +600,36 @@ fn rar_list(path: &Path) -> Result<Vec<String>> {
         }
     }
     Ok(names)
+}
+
+/// Page count and ComicInfo.xml of a non-solid RAR in a single pass over the
+/// archive (skipping an entry is just a seek). Returns `None` for a solid
+/// archive, where skipping entries would mean decompressing them: there the
+/// headers are listed first, and the archive is only processed up to
+/// ComicInfo.xml when it exists.
+fn rar_content_single_pass(path: &Path) -> Result<Option<BookContent>> {
+    let mut archive = unrar::Archive::new(path)
+        .open_for_processing()
+        .map_err(|e| anyhow!(t!("Unreadable RAR: {0}", e)))?;
+    if archive.is_solid() {
+        return Ok(None);
+    }
+    let mut content = BookContent::default();
+    while let Some(header) = archive.read_header().map_err(|e| anyhow!("{e}"))? {
+        let name = header.entry().filename.to_string_lossy().replace('\\', "/");
+        let is_file = header.entry().is_file();
+        archive = if is_file && is_comicinfo_name(&name) && content.info.is_none() {
+            let (data, next) = header.read().map_err(|e| anyhow!("{e}"))?;
+            content.info = comicinfo::parse(&String::from_utf8_lossy(&data)).ok();
+            next
+        } else {
+            if is_file && is_image_name(&name) {
+                content.page_count += 1;
+            }
+            header.skip().map_err(|e| anyhow!("{e}"))?
+        };
+    }
+    Ok(Some(content))
 }
 
 /// First entry matching `want`, stopping there (no need to go through the
