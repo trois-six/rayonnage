@@ -2612,6 +2612,7 @@ dependencies = [
  "chrono",
  "crc32fast",
  "directories",
+ "flate2",
  "gtk4",
  "html-escape",
  "image",

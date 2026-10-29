@@ -396,7 +396,7 @@ fn run_export_books(state: &State, settings: ExportSettings, books: Vec<Book>) {
         );
         return;
     }
-    let ask = settings.target == Target::ReplaceSource || settings.delete_original;
+    let ask = (settings.target == Target::ReplaceSource || settings.delete_original) && state.settings.borrow().confirm_convert;
     let st = state.clone();
     let go = move || {
         let s = settings.clone();

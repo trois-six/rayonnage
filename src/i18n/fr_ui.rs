@@ -209,4 +209,32 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Dark", "Sombre"),
     ("Appearance:", "Apparence :"),
     ("Comics, BD and manga library manager inspired by ComicRack CE.", "Gestionnaire de bibliothèque de BD, comics et mangas inspiré de ComicRack CE."),
+    (
+        "No ComicRack configuration file (App.Config, losettingsx.dat, Config.xml) was found",
+        "Aucun fichier de configuration ComicRack (App.Config, losettingsx.dat, Config.xml) n'a été trouvé",
+    ),
+    ("Bedetheque: settings imported", "Bedetheque : réglages importés"),
+    ("File organization: {0} profile(s) imported", "Rangement des fichiers : {0} profil(s) importé(s)"),
+    ("Preferences imported", "Préférences importées"),
+    ("Export settings imported", "Réglages d'export importés"),
+    ("Import ComicRack Settings…", "Importer la configuration de ComicRack…"),
+    (
+        "ComicRack configuration (zip, App.Config, losettingsx.dat, Config.xml)",
+        "Configuration ComicRack (zip, App.Config, losettingsx.dat, Config.xml)",
+    ),
+    ("Import ComicRack Settings", "Importer la configuration de ComicRack"),
+    ("Settings found in {0}:", "Réglages trouvés dans {0} :"),
+    ("Bedetheque settings (fields and options)", "Réglages Bedetheque (champs et options)"),
+    ("File organization profiles: {0} ({1})", "Profils de rangement des fichiers : {0} ({1})"),
+    (
+        "Preferences: scan at startup, removal of missing files, convert confirmation",
+        "Préférences : scan au démarrage, retrait des fichiers disparus, confirmation des conversions",
+    ),
+    ("Export settings and presets", "Réglages et préréglages d'export"),
+    ("Windows paths", "Chemins Windows"),
+    (
+        "Local folder corresponding to each Windows drive or share used by the profiles:",
+        "Dossier local correspondant à chaque lecteur ou partage Windows utilisé par les profils :",
+    ),
+    ("Import", "Importer"),
 ];

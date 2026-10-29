@@ -6,6 +6,7 @@ mod columns_dialog;
 mod convert_dialog;
 mod edit_dialog;
 mod icons;
+mod import_dialog;
 mod inline_edit;
 mod journal;
 mod organizer_ui;
@@ -613,6 +614,7 @@ fn main_menu() -> gio::Menu {
     lib.append(Some(t!("Select All")), Some("win.select-all"));
     lib.append(Some(t!("Columns…")), Some("win.columns"));
     lib.append(Some(t!("Message Log")), Some("win.journal"));
+    lib.append(Some(t!("Import ComicRack Settings…")), Some("win.import-comicrack"));
     lib.append(Some(t!("Settings…")), Some("win.settings"));
     m.append_section(None, &lib);
     m.append_section(None, &books_section());
@@ -662,6 +664,7 @@ fn build_actions(app: &gtk::Application, state: &State) {
     add("about", about);
     add("inline-edit", inline_edit::edit_selection);
     add("journal", |st| st.journal.open(&st.window));
+    add("import-comicrack", import_dialog::open);
     let errors_only = gio::SimpleAction::new("journal-errors-only", Some(glib::VariantTy::BOOLEAN));
     let weak = Rc::downgrade(state);
     errors_only.connect_activate(move |_, p| {

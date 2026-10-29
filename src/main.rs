@@ -9,6 +9,7 @@ mod autonumber;
 
 mod bedetheque;
 mod comicinfo;
+mod comicrack_import;
 mod convert;
 mod epub;
 mod library;

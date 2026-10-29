@@ -1116,7 +1116,8 @@ fn u32_at(b: &[u8], p: usize) -> u64 {
     u32::from_le_bytes([b[p], b[p + 1], b[p + 2], b[p + 3]]) as u64
 }
 
-/// Adds or replaces ComicInfo.xml in a ZIP/CBZ without rewriting the pages:
+/// Adds or replaces ComicInfo.xml (Deflate, like ComicRack) in a ZIP/CBZ
+/// without rewriting the pages:
 /// the new entry, a new central directory (without the old ComicInfo.xml)
 /// and its end record are appended at the end of the file; nothing before is
 /// modified, so an interrupted update leaves the previous version readable.
@@ -1173,41 +1174,48 @@ fn zip_update_in_place(path: &Path, xml: &[u8]) -> Result<bool> {
 
     let name = b"ComicInfo.xml";
     let crc = crc32fast::hash(xml);
+    // Deflate (level 5), as the "7z u" that ComicRack uses for this update.
+    let packed = {
+        use flate2::write::DeflateEncoder;
+        let mut enc = DeflateEncoder::new(Vec::new(), flate2::Compression::new(5));
+        enc.write_all(xml)?;
+        enc.finish()?
+    };
     let now = chrono::Local::now();
     use chrono::{Datelike, Timelike};
     let time = ((now.hour() << 11) | (now.minute() << 5) | (now.second() / 2)) as u16;
     let date = (((now.year() - 1980).max(0) as u32) << 9 | (now.month() << 5) | now.day()) as u16;
     let local_offset = len;
-    let new_cd_offset = len + 30 + name.len() as u64 + xml.len() as u64;
+    let new_cd_offset = len + 30 + name.len() as u64 + packed.len() as u64;
     if new_cd_offset + kept.len() as u64 + 46 + name.len() as u64 > u32::MAX as u64 || count + 1 >= 0xFFFF {
         return Ok(false);
     }
     let mut out = Vec::with_capacity(xml.len() + kept.len() + 256);
-    // Local file header (stored, UTF-8 name).
+    // Local file header (deflated, UTF-8 name).
     out.extend_from_slice(b"PK\x03\x04");
     out.extend_from_slice(&20u16.to_le_bytes());
     out.extend_from_slice(&0x0800u16.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&8u16.to_le_bytes());
     out.extend_from_slice(&time.to_le_bytes());
     out.extend_from_slice(&date.to_le_bytes());
     out.extend_from_slice(&crc.to_le_bytes());
-    out.extend_from_slice(&(xml.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(packed.len() as u32).to_le_bytes());
     out.extend_from_slice(&(xml.len() as u32).to_le_bytes());
     out.extend_from_slice(&(name.len() as u16).to_le_bytes());
     out.extend_from_slice(&0u16.to_le_bytes());
     out.extend_from_slice(name);
-    out.extend_from_slice(xml);
+    out.extend_from_slice(&packed);
     // Central directory: kept records + the new one.
     out.extend_from_slice(&kept);
     out.extend_from_slice(b"PK\x01\x02");
     out.extend_from_slice(&((3u16 << 8) | 20).to_le_bytes());
     out.extend_from_slice(&20u16.to_le_bytes());
     out.extend_from_slice(&0x0800u16.to_le_bytes());
-    out.extend_from_slice(&0u16.to_le_bytes());
+    out.extend_from_slice(&8u16.to_le_bytes());
     out.extend_from_slice(&time.to_le_bytes());
     out.extend_from_slice(&date.to_le_bytes());
     out.extend_from_slice(&crc.to_le_bytes());
-    out.extend_from_slice(&(xml.len() as u32).to_le_bytes());
+    out.extend_from_slice(&(packed.len() as u32).to_le_bytes());
     out.extend_from_slice(&(xml.len() as u32).to_le_bytes());
     out.extend_from_slice(&(name.len() as u16).to_le_bytes());
     out.extend_from_slice(&[0, 0, 0, 0, 0, 0, 0, 0]);

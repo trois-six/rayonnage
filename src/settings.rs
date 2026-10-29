@@ -52,6 +52,8 @@ pub struct Settings {
     /// Last custom export settings and user presets.
     pub export: ExportSettings,
     pub export_presets: Vec<ExportSettings>,
+    /// Ask before a conversion replaces or deletes the original files.
+    pub confirm_convert: bool,
     /// Last options of "Split Packs into Albums".
     pub split: crate::packs::SplitOptions,
     pub scraper: ScraperSettings,
@@ -131,6 +133,7 @@ impl Default for Settings {
             window_height: 800,
             export: ExportSettings::default(),
             export_presets: Vec::new(),
+            confirm_convert: true,
             split: crate::packs::SplitOptions::default(),
             scraper: ScraperSettings::default(),
             organizer: OrganizerSettings::default(),

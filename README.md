@@ -80,8 +80,9 @@ forced in Settings → Library (applied at the next start).
 - **Update Book Files** (Ctrl+S) writes `ComicInfo.xml` into CBZ/ZIP, CB7/7Z and CBT/TAR files,
   and into CBR/RAR files when the `rar` program is installed. Books modified but not yet written are
   marked ✎. An option writes the files automatically after each change.
-  - In a CBZ, the new ComicInfo.xml is appended at the end of the file without rewriting the pages:
-    a few KB are written instead of the whole book, and the rest of the file is left untouched.
+  - In a CBZ, the new ComicInfo.xml (Deflate, like ComicRack) is appended at the end of the file
+    without rewriting the pages: a few KB are written instead of the whole book, and the rest of
+    the file is left untouched.
   - As in ComicRack, pages are neither renamed nor modified.
 - **Refresh** reads the information from the files again. The "force" variant replaces the
   library values.
@@ -135,6 +136,22 @@ reuses the last profiles; "Undo Last Organization" puts the files back.
 - Filing options: replacement values for empty fields, illegal characters, month names, exclusions
   by folder or by rules, removal of empty folders, duplicate handling (replace, skip, rename).
 - Detailed report and undo of the last run.
+
+### Importing a ComicRack configuration
+Menu → "Import ComicRack Settings…" reads a ZIP (or a folder) holding `App.Config` (Bedetheque
+Scrapper 2), `losettingsx.dat` (Library Organizer) and `Config.xml` (ComicRack): Bedetheque
+options, file organization profiles, scan and conversion preferences, export settings and
+presets. The Windows drives used by the profiles (`X:\`…) are mapped to local folders. On Windows,
+these PowerShell lines gather the files into `comicrack-config.zip` on the desktop:
+
+```powershell
+$out = "$env:USERPROFILE\Desktop\comicrack-config"
+New-Item -ItemType Directory -Force $out | Out-Null
+Get-ChildItem "$env:APPDATA\cYo", "$env:ProgramFiles\ComicRack*" -Recurse `
+    -Include App.Config, losettingsx.dat, Config.xml -ErrorAction SilentlyContinue |
+  ForEach-Object { Copy-Item $_.FullName "$out\$($_.Directory.Name) - $($_.Name)" }
+Compress-Archive "$out\*" "$out.zip" -Force
+```
 
 ## Building
 

@@ -83,7 +83,8 @@ Boîte « Informations » sur le modèle de ComicRack, pour un ou plusieurs livr
 - **Mettre à jour les fichiers** (Ctrl+S) écrit `ComicInfo.xml` dans les CBZ/ZIP, CB7/7Z et CBT/TAR,
   et dans les CBR/RAR si le programme `rar` est installé. Les livres modifiés mais pas encore écrits
   sont marqués ✎. Une option permet l'écriture automatique après chaque modification.
-  - Dans un CBZ, le nouveau ComicInfo.xml est ajouté à la fin du fichier sans réécrire les pages :
+  - Dans un CBZ, le nouveau ComicInfo.xml (compressé en Deflate, comme ComicRack) est ajouté à la
+    fin du fichier sans réécrire les pages :
     quelques Ko écrits au lieu de tout le livre. Le reste du fichier n'est pas touché.
   - Comme dans ComicRack, les pages ne sont ni renommées ni modifiées.
 - **Rafraîchir depuis les fichiers** relit les informations. La version « forcer » remplace les
@@ -140,6 +141,23 @@ réutilise les derniers profils ; « Annuler le dernier rangement » remet les f
   exclusions par dossier ou par règles, suppression des dossiers vides, gestion des doublons
   (remplacer, ignorer, renommer).
 - Rapport détaillé et annulation du dernier rangement.
+
+### Import d'une configuration ComicRack
+Menu → « Importer la configuration de ComicRack… » lit un ZIP (ou un dossier) contenant
+`App.Config` (Bedetheque Scrapper 2), `losettingsx.dat` (Library Organizer) et `Config.xml`
+(ComicRack) : options Bedetheque, profils de rangement, préférences de scan et de conversion,
+réglages et préréglages d'export. Les lecteurs Windows utilisés par les profils (`X:\`…) sont
+associés à des dossiers locaux. Sous Windows, ces lignes PowerShell rassemblent les fichiers dans
+`comicrack-config.zip` sur le Bureau :
+
+```powershell
+$out = "$env:USERPROFILE\Desktop\comicrack-config"
+New-Item -ItemType Directory -Force $out | Out-Null
+Get-ChildItem "$env:APPDATA\cYo", "$env:ProgramFiles\ComicRack*" -Recurse `
+    -Include App.Config, losettingsx.dat, Config.xml -ErrorAction SilentlyContinue |
+  ForEach-Object { Copy-Item $_.FullName "$out\$($_.Directory.Name) - $($_.Name)" }
+Compress-Archive "$out\*" "$out.zip" -Force
+```
 
 ## Compilation
 

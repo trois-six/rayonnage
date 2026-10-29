@@ -27,6 +27,7 @@ html-escape = "0.3"
 urlencoding = "2"
 anyhow = "1"
 crc32fast = "1"
+flate2 = "1"
 sys-locale = "0.3"
 rusqlite = { version = "0.41", features = ["bundled"] }
 rmp-serde = "1"
