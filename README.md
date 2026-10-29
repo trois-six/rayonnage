@@ -165,11 +165,13 @@ Interface strings are written in English in the code with the `t!` macro (`t!("T
 to English. A unit test checks that each translation keeps the placeholders of its English text.
 
 ## Data
-Settings are stored in `settings.json` and the library in `library.json`, in the user's
-configuration and data folders:
+Settings are stored in `settings.json`, and the library in an SQLite database, `library.db` (one
+row per book; only the books that changed are written), in the user's configuration and data
+folders:
 - Linux: `~/.config/rayonnage` and `~/.local/share/rayonnage`
 - Windows: `%APPDATA%\trois-six\rayonnage`
 - macOS: `~/Library/Application Support/org.trois-six.rayonnage`
 
 Cover thumbnails are cached. Settings and library from the previous name (`books-organizer`) are
-copied automatically on first start.
+copied automatically on first start, and a former `library.json` is imported into the database
+(then renamed `library.json.imported`).

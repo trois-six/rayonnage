@@ -7,7 +7,7 @@ use std::time::{Instant, SystemTime};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::archive;
 use crate::model::Book;
@@ -59,50 +59,172 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
+/// The library: every book, kept in memory, and stored in an SQLite
+/// database (`library.db`) with one row per book (MessagePack encoded). Only
+/// the books changed since the last save are written, in one transaction.
+#[derive(Default)]
 pub struct Library {
+    /// Books in insertion order. Change them through `add`, `get_mut` and
+    /// `remove` so that the changes are saved.
     pub books: Vec<Book>,
     pub next_id: u64,
+    /// Book id → position in `books`.
+    index: HashMap<u64, usize>,
+    dirty: HashSet<u64>,
+    removed: HashSet<u64>,
+    db: Option<rusqlite::Connection>,
+    db_path: PathBuf,
+}
+
+/// Format of the former JSON library file, imported once.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct JsonLibrary {
+    books: Vec<Book>,
+    next_id: u64,
 }
 
 impl Library {
     pub fn path() -> PathBuf {
+        data_dir().join("library.db")
+    }
+
+    fn json_path() -> PathBuf {
         data_dir().join("library.json")
     }
 
+    fn open_db(path: &Path) -> Result<rusqlite::Connection> {
+        let db = rusqlite::Connection::open(path)?;
+        db.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS books (id INTEGER PRIMARY KEY, data BLOB NOT NULL);",
+        )?;
+        Ok(db)
+    }
+
     pub fn load() -> Library {
-        let mut lib: Library = std::fs::read(Self::path())
-            .ok()
-            .and_then(|d| serde_json::from_slice(&d).ok())
-            .unwrap_or_default();
+        Self::load_at(&Self::path(), &Self::json_path())
+    }
+
+    fn load_at(db_path: &Path, json: &Path) -> Library {
+        let mut lib = Library { db_path: db_path.to_path_buf(), ..Default::default() };
+        match Self::open_db(db_path) {
+            Ok(db) => {
+                if let Err(e) = lib.read_db(&db) {
+                    eprintln!("{e:#}");
+                }
+                lib.db = Some(db);
+            }
+            Err(e) => eprintln!("{}: {e:#}", db_path.display()),
+        }
+        // First start with the database: import the former JSON file.
+        if lib.books.is_empty()
+            && json.is_file()
+            && let Some(old) = std::fs::read(json).ok().and_then(|d| serde_json::from_slice::<JsonLibrary>(&d).ok())
+        {
+            lib.next_id = old.next_id;
+            for b in old.books {
+                lib.dirty.insert(b.id);
+                lib.books.push(b);
+            }
+            lib.reindex();
+            if lib.save().is_ok() {
+                let _ = std::fs::rename(json, json.with_extension("json.imported"));
+            }
+        }
         lib.next_id = lib.next_id.max(lib.books.iter().map(|b| b.id).max().unwrap_or(0) + 1).max(1);
         lib
     }
 
-    pub fn save(&self) -> Result<()> {
-        let data = serde_json::to_vec(self)?;
-        write_atomic(&Self::path(), &data).context(t!("Saving the library"))
+    fn read_db(&mut self, db: &rusqlite::Connection) -> Result<()> {
+        self.next_id = db
+            .query_row("SELECT value FROM meta WHERE key = 'next_id'", [], |r| r.get::<_, String>(0))
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        let mut stmt = db.prepare("SELECT id, data FROM books ORDER BY id")?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
+        for row in rows {
+            let (id, data) = row?;
+            match rmp_serde::from_slice::<Book>(&data) {
+                Ok(mut b) => {
+                    b.id = id as u64;
+                    self.books.push(b);
+                }
+                Err(e) => eprintln!("book {id}: {e}"),
+            }
+        }
+        self.reindex();
+        Ok(())
+    }
+
+    fn reindex(&mut self) {
+        self.index = self.books.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
+    }
+
+    /// Writes the books added, changed or removed since the last save.
+    pub fn save(&mut self) -> Result<()> {
+        if self.dirty.is_empty() && self.removed.is_empty() {
+            return Ok(());
+        }
+        if self.db.is_none() {
+            self.db = Some(Self::open_db(&self.db_path)?);
+        }
+        let db = self.db.as_mut().unwrap();
+        let tx = db.transaction()?;
+        {
+            let mut delete = tx.prepare_cached("DELETE FROM books WHERE id = ?1")?;
+            for id in &self.removed {
+                delete.execute([*id as i64])?;
+            }
+            let mut upsert = tx.prepare_cached("INSERT OR REPLACE INTO books (id, data) VALUES (?1, ?2)")?;
+            for id in &self.dirty {
+                if let Some(b) = self.index.get(id).and_then(|&i| self.books.get(i)) {
+                    upsert.execute(rusqlite::params![*id as i64, rmp_serde::to_vec_named(b)?])?;
+                }
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO meta (key, value) VALUES ('next_id', ?1)",
+                [self.next_id.to_string()],
+            )?;
+        }
+        tx.commit().context(t!("Saving the library"))?;
+        self.dirty.clear();
+        self.removed.clear();
+        Ok(())
     }
 
     pub fn add(&mut self, mut book: Book) -> u64 {
         book.id = self.next_id;
         self.next_id += 1;
         let id = book.id;
+        self.index.insert(id, self.books.len());
         self.books.push(book);
+        self.dirty.insert(id);
         id
     }
 
     pub fn get(&self, id: u64) -> Option<&Book> {
-        self.books.iter().find(|b| b.id == id)
+        self.index.get(&id).and_then(|&i| self.books.get(i))
     }
 
+    /// The book, marked as changed (it will be saved).
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Book> {
-        self.books.iter_mut().find(|b| b.id == id)
+        let i = *self.index.get(&id)?;
+        self.dirty.insert(id);
+        self.books.get_mut(i)
     }
 
     pub fn remove(&mut self, ids: &[u64]) {
+        let ids: HashSet<u64> = ids.iter().copied().collect();
         self.books.retain(|b| !ids.contains(&b.id));
+        for id in ids {
+            self.dirty.remove(&id);
+            self.removed.insert(id);
+        }
+        self.reindex();
     }
 }
 
@@ -470,6 +592,37 @@ pub fn thumbnail(book: &Book, max: u32) -> Result<Vec<u8>> {
     let data = buf.into_inner();
     let _ = write_atomic(&cache, &data);
     Ok(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn database_import_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let (db, json) = (dir.path().join("library.db"), dir.path().join("library.json"));
+        let mut b = Book { id: 3, file_path: "/b/x.cbz".into(), ..Default::default() };
+        b.info.series = "Série".into();
+        let old = serde_json::json!({ "books": [b], "next_id": 4 });
+        std::fs::write(&json, old.to_string()).unwrap();
+
+        // The JSON file is imported, then renamed.
+        let mut lib = Library::load_at(&db, &json);
+        assert_eq!((lib.books.len(), lib.next_id), (1, 4));
+        assert!(!json.exists());
+        let id = lib.add(Book { file_path: "/b/y.cbz".into(), ..Default::default() });
+        lib.get_mut(3).unwrap().info.title = "Titre".into();
+        lib.save().unwrap();
+        lib.remove(&[id]);
+        lib.save().unwrap();
+
+        let lib = Library::load_at(&db, &json);
+        assert_eq!(lib.books.len(), 1);
+        assert_eq!(lib.get(3).unwrap().info.title, "Titre");
+        assert_eq!(lib.get(3).unwrap().info.series, "Série");
+        assert_eq!(lib.next_id, 5);
+    }
 }
 
 #[cfg(test)]

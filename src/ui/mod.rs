@@ -61,7 +61,6 @@ pub struct AppState {
     /// The user confirmed quitting while an operation was running.
     quitting: Cell<bool>,
     columns_save_pending: Cell<bool>,
-    library_dirty: Cell<bool>,
     save_pending: Cell<bool>,
     info_panel: gtk::Box,
     info_cover: gtk::Picture,
@@ -154,7 +153,6 @@ pub fn build_ui(app: &gtk::Application) {
         busy: Cell::new(false),
         quitting: Cell::new(false),
         columns_save_pending: Cell::new(false),
-        library_dirty: Cell::new(false),
         save_pending: Cell::new(false),
         info_panel,
         info_cover,
@@ -818,7 +816,6 @@ impl AppState {
     /// Saves the library a moment later: successive changes (a scan, a
     /// scraping session...) are written once.
     pub fn save_library(self: &Rc<Self>) {
-        self.library_dirty.set(true);
         if self.save_pending.replace(true) {
             return;
         }
@@ -831,12 +828,9 @@ impl AppState {
         });
     }
 
-    /// Writes the library now if it changed since the last save.
+    /// Writes the books changed since the last save (nothing when none).
     pub fn flush_library(&self) {
-        if !self.library_dirty.replace(false) {
-            return;
-        }
-        if let Err(e) = self.library.borrow().save() {
+        if let Err(e) = self.library.borrow_mut().save() {
             self.journal.error(&format!("{e:#}"));
             widgets::alert(&self.window, t!("Error"), &format!("{e:#}"));
         }

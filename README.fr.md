@@ -165,10 +165,12 @@ Leurs chemins se règlent dans Paramètres → Fichiers.
 - `ddjvu` et `djvused` (DjVuLibre) servent à lire les DjVu.
 
 ## Données
-Les paramètres sont dans `settings.json` et la bibliothèque dans `library.json`, dans les dossiers
-de configuration et de données de l'utilisateur :
+Les paramètres sont dans `settings.json`, et la bibliothèque dans une base SQLite, `library.db`
+(une ligne par livre ; seuls les livres modifiés sont réécrits), dans les dossiers de configuration
+et de données de l'utilisateur :
 - Linux : `~/.config/rayonnage` et `~/.local/share/rayonnage`
 - Windows : `%APPDATA%\trois-six\rayonnage`
 - macOS : `~/Library/Application Support/org.trois-six.rayonnage`
 
-Les vignettes de couverture sont mises en cache.
+Les vignettes de couverture sont mises en cache. Un ancien `library.json` est importé
+automatiquement dans la base au premier lancement (puis renommé `library.json.imported`).
