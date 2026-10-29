@@ -107,7 +107,9 @@ starting from a given number, and can store the total count.
   - **Images**: conversion to JPEG, PNG, WebP, GIF, TIFF or BMP with quality setting; resizing;
     double pages (split, rotate, adapt); brightness, contrast, saturation, gamma, sharpening,
     automatic contrast.
-- Custom presets can be saved.
+- Custom presets can be saved. A confirmation is asked before a conversion replaces or deletes the
+  original files (it can be turned off, e.g. by importing a ComicRack configuration where it was
+  hidden).
 - **Split Packs into Albums…** turns a pack (an archive holding several albums) into one book per
   album: each archive found inside the pack (cbz, cbr, zip, rar, pdf…) and each folder of images
   (with its ComicInfo.xml) becomes a book, converted to CBZ/CB7/CBR/CBT/PDF or kept as it is. The
@@ -132,7 +134,8 @@ Books menu → "Organize Files…" (based on the Library Organizer plugin): move
 the filing of book files according to folder and file name templates. "Organize Files Again"
 reuses the last profiles; "Undo Last Organization" puts the files back.
 - Template example: `{<publisher>}/{<series>}{ (<startyear>)}` and `{<series>}{ #<number3>}`.
-- Multiple profiles, live preview.
+- Multiple profiles, live preview. The small arrow next to the toolbar button lists the profiles:
+  choosing one organizes the selected books with it right away (as the ComicRack toolbar button).
 - Filing options: replacement values for empty fields, illegal characters, month names, exclusions
   by folder or by rules, removal of empty folders, duplicate handling (replace, skip, rename).
 - Detailed report and undo of the last run.

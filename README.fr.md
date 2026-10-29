@@ -111,7 +111,9 @@ liste, à partir d'un numéro donné, et peut enregistrer le nombre total.
   - **Images** : conversion en JPEG, PNG, WebP, GIF, TIFF ou BMP avec réglage de la qualité ;
     redimensionnement ; pages doubles (couper, pivoter, adapter) ; luminosité, contraste,
     saturation, gamma, netteté, contraste automatique.
-- Les préréglages personnels sont enregistrables.
+- Les préréglages personnels sont enregistrables. Une confirmation est demandée avant qu'une
+  conversion remplace ou supprime les fichiers d'origine (désactivable, par exemple en important
+  une configuration ComicRack où elle était masquée).
 - **Découper des packs en albums…** transforme un pack (une archive contenant plusieurs albums) en
   un livre par album : chaque archive trouvée dans le pack (cbz, cbr, zip, rar, pdf…) et chaque
   dossier d'images (avec son ComicInfo.xml) devient un livre, converti en CBZ/CB7/CBR/CBT/PDF ou
@@ -136,7 +138,9 @@ Menu → « Ranger les fichiers… » (d'après le plugin Library Organizer) : d
 rangement des fichiers selon des modèles de dossier et de nom de fichier. « Ranger à nouveau »
 réutilise les derniers profils ; « Annuler le dernier rangement » remet les fichiers en place.
 - Exemple de modèle : `{<publisher>}/{<series>}{ (<startyear>)}` et `{<series>}{ #<number3>}`.
-- Profils multiples, prévisualisation en direct.
+- Profils multiples, prévisualisation en direct. La petite flèche à côté du bouton de la barre
+  d'outils liste les profils : en choisir un range tout de suite les livres sélectionnés avec ce
+  profil (comme le bouton de ComicRack).
 - Options de rangement : valeurs vides de remplacement, caractères interdits, noms des mois,
   exclusions par dossier ou par règles, suppression des dossiers vides, gestion des doublons
   (remplacer, ignorer, renommer).
