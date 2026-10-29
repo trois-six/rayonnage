@@ -43,6 +43,7 @@ et [Library Organizer](https://github.com/Stonepaw/comicrack-library-organizer).
     sélectionnés ; modifier le nom de fichier renomme le fichier.
   - Les colonnes numériques (numéro, volume, nombre, année, mois, jour…) des lignes sélectionnées
     ont des boutons ▲▼ pour incrémenter ou décrémenter la valeur.
+  - Une ligne sur deux sur un fond légèrement différent, comme dans ComicRack.
   - Recherche rapide (Ctrl+F), filtre par dossier et par « infos non enregistrées » dans la barre
     latérale.
   - Panneau d'information avec la couverture.

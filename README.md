@@ -46,6 +46,7 @@ forced in Settings → Library (applied at the next start).
     cancels. The value applies to all the selected books; editing the file name renames the file.
   - Numeric columns (number, volume, count, year, month, day…) of the selected rows have up/down
     buttons to increment or decrement the value.
+  - Alternating row colors, as in ComicRack.
   - Quick search (Ctrl+F), filter by folder and by "unsaved info" in the sidebar.
   - Information panel with the cover.
 - Activity feedback:

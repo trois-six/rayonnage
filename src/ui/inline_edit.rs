@@ -280,7 +280,8 @@ pub fn install_css() {
          button.spin-mini image { -gtk-icon-size: 10px; }
          entry.inline-edit { min-height: 0; padding-top: 0; padding-bottom: 0; }
          menubutton.split-arrow > button { min-width: 0; padding-left: 0; padding-right: 1px; margin-left: -4px; }
-         menubutton.split-arrow image { -gtk-icon-size: 8px; }",
+         menubutton.split-arrow image { -gtk-icon-size: 8px; }
+         columnview.zebra > listview > row:nth-child(even):not(:selected) { background-color: alpha(currentColor, 0.06); }",
     );
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);

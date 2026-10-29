@@ -105,6 +105,8 @@ pub fn build_ui(app: &gtk::Application) {
     column_view.set_show_column_separators(true);
     column_view.set_show_row_separators(false);
     column_view.add_css_class("data-table");
+    // One row out of two on a slightly different background, as in ComicRack.
+    column_view.add_css_class("zebra");
 
     let status = gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).build();
     let progress = gtk::ProgressBar::builder().visible(false).valign(gtk::Align::Center).width_request(220).build();
