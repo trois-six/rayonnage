@@ -278,7 +278,9 @@ pub fn install_css() {
     css.load_from_string(
         "button.spin-mini { min-height: 0; min-width: 0; padding: 0 2px; margin: 0; border-radius: 3px; }
          button.spin-mini image { -gtk-icon-size: 10px; }
-         entry.inline-edit { min-height: 0; padding-top: 0; padding-bottom: 0; }",
+         entry.inline-edit { min-height: 0; padding-top: 0; padding-bottom: 0; }
+         menubutton.split-arrow > button { min-width: 0; padding-left: 0; padding-right: 1px; margin-left: -4px; }
+         menubutton.split-arrow image { -gtk-icon-size: 8px; }",
     );
     if let Some(display) = gdk::Display::default() {
         gtk::style_context_add_provider_for_display(&display, &css, gtk::STYLE_PROVIDER_PRIORITY_APPLICATION);

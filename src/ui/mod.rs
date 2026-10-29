@@ -398,6 +398,7 @@ fn build_layout(state: &State) -> gtk::Box {
     let organize_arrow = gtk::MenuButton::builder()
         .icon_name("pan-down-symbolic")
         .tooltip_text(t!("Organize with a profile"))
+        .css_classes(["split-arrow"])
         .build();
     let weak = Rc::downgrade(state);
     organize_arrow.set_create_popup_func(move |b| {
