@@ -135,4 +135,5 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Unreadable cover image", "Image de couverture illisible"),
     ("EPUB Document", "Document EPUB"),
     ("Invalid EPUB: no package document", "EPUB invalide : pas de document de paquetage"),
+    ("{0} (of {1})", "{0} (Sur {1})"),
 ];

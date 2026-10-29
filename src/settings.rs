@@ -96,8 +96,9 @@ pub fn default_columns() -> Vec<ColumnSetting> {
 fn default_width(f: Field) -> i32 {
     match f {
         Field::Modified => 30,
-        Field::Number | Field::Volume | Field::Count | Field::Year | Field::Month | Field::Day
-        | Field::PageCount | Field::AlternateCount | Field::AlternateNumber => 70,
+        Field::Number | Field::AlternateNumber => 100,
+        Field::Volume | Field::Count | Field::Year | Field::Month | Field::Day
+        | Field::PageCount | Field::AlternateCount => 70,
         Field::Series | Field::Title | Field::FileName | Field::Caption | Field::AlternateSeries => 220,
         Field::FilePath | Field::FileDirectory | Field::Summary | Field::Notes => 300,
         _ => 130,

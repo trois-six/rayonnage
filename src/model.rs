@@ -897,7 +897,7 @@ impl Field {
                     if i.day > 0 {
                         d.format("%d/%m/%Y").to_string()
                     } else if i.month > 0 {
-                        format!("{:02}/{}", d.month(), d.year())
+                        format!("{}/{}", d.month(), d.year())
                     } else {
                         d.year().to_string()
                     }
@@ -952,6 +952,15 @@ impl Field {
                 }
             }
             Field::Month => month_name(b.info.month).to_string(),
+            // "1 (of 24)", as ComicRack's Number column.
+            Field::Number | Field::AlternateNumber => {
+                let (n, c) = if self == Field::Number {
+                    (&b.info.number, b.info.count)
+                } else {
+                    (&b.info.alternate_number, b.info.alternate_count)
+                };
+                if !n.is_empty() && c > 0 { t!("{0} (of {1})", n, c) } else { n.clone() }
+            }
             Field::Summary | Field::Notes | Field::Review | Field::BookNotes => {
                 self.get(b).lines().next().unwrap_or("").to_string()
             }
@@ -1083,6 +1092,19 @@ mod tests {
         assert_eq!((p.series.as_str(), p.number.as_str()), ("Asterix", "5"));
         let p = propose_from_filename("Les Schtroumpfs");
         assert_eq!((p.series.as_str(), p.number.as_str()), ("Les Schtroumpfs", ""));
+    }
+
+    #[test]
+    fn number_of_count() {
+        let mut b = Book::default();
+        b.info.number = "7".into();
+        assert_eq!(Field::Number.display(&b), "7");
+        b.info.count = 24;
+        assert_eq!(Field::Number.display(&b), "7 (of 24)");
+        assert_eq!(Field::Number.get(&b), "7");
+        b.info.year = 1992;
+        b.info.month = 3;
+        assert_eq!(Field::Released.display(&b), "3/1992");
     }
 
     #[test]
