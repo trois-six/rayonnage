@@ -1,4 +1,4 @@
-//! Library database (JSON file) and folder scanning.
+//! Library database (SQLite) and folder scanning.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
