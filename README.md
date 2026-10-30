@@ -17,13 +17,12 @@ native features. Its interface is in English and French.
 ## Highlights
 
 - **A library from your folders**: CBZ, CBR, CB7, CBT, PDF, DjVu and EPUB,
-  scanned in parallel and fast even on a network drive, with ComicRack's
-  columns.
+  scanned in parallel, with ComicRack's columns.
 - **Edit like in ComicRack**: the Info dialog, in-place editing in the list
   with suggestions, every ComicInfo.xml field, pages reordered, rotated or
   deleted, and automatic numbering.
 - **Write it into the files**: ComicInfo.xml updated in CBZ, CB7, CBT and
-  CBR files; a CBZ gets a few kilobytes appended instead of a full rewrite.
+  CBR files.
 - **Convert**: to CBZ, CB7, CBR, CBT, PDF or images, with ComicRack's export
   options and page naming, and packs split into one book per album.
 - **Fetch from Bedetheque**: series, album, edition, credits, summary and
