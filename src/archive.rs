@@ -697,10 +697,23 @@ fn pdf_pages(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
 
 fn pdf_image_bytes(doc: &lopdf::Document, img: &lopdf::xobject::PdfImage) -> Option<(Vec<u8>, &'static str)> {
     let filters = img.filters.clone().unwrap_or_default();
-    match filters.last().map(String::as_str) {
-        Some("DCTDecode") if filters.len() == 1 => return Some((img.content.to_vec(), "jpg")),
-        Some("JPXDecode") if filters.len() == 1 => return Some((img.content.to_vec(), "jp2")),
-        _ => {}
+    // A JPEG or JPEG 2000 file, maybe compressed again (Flate) by the scanner
+    // software.
+    if let Some((last, rest)) = filters.split_last()
+        && let Some(ext) = match last.as_str() {
+            "DCTDecode" => Some("jpg"),
+            "JPXDecode" => Some("jp2"),
+            _ => None,
+        }
+        && rest.iter().all(|f| f == "FlateDecode")
+    {
+        let mut data = img.content.to_vec();
+        for _ in rest {
+            let mut out = Vec::new();
+            flate2::read::ZlibDecoder::new(&data[..]).read_to_end(&mut out).ok()?;
+            data = out;
+        }
+        return Some((data, ext));
     }
     let stream = doc.get_object(img.id).ok()?.as_stream().ok()?;
     let raw = if filters.is_empty() {
@@ -724,13 +737,14 @@ fn pdf_image_bytes(doc: &lopdf::Document, img: &lopdf::xobject::PdfImage) -> Opt
     Some((buf.into_inner(), "png"))
 }
 
+/// The page rendered as PNG, written on the standard output (no output
+/// name given: with `-`, recent versions write a file named `-.png`).
 fn pdftoppm_page(path: &Path, num: u32) -> Result<Vec<u8>> {
     let prog = crate::util::find_program(&tools().pdftoppm, &["pdftoppm"])
         .ok_or_else(|| anyhow!(t!("PDF page without an image: install pdftoppm (poppler) to convert it")))?;
     let out = Command::new(prog)
         .args(["-png", "-r", "150", "-singlefile", "-f", &num.to_string(), "-l", &num.to_string()])
         .arg(path)
-        .arg("-")
         .output()?;
     if !out.status.success() || out.stdout.is_empty() {
         bail!(t!("pdftoppm failed: {0}", String::from_utf8_lossy(&out.stderr)));
@@ -1352,6 +1366,50 @@ mod tests {
         write_book(&pdf, OutputFormat::Pdf, &pages, None, 1).unwrap();
         assert_eq!(read_content(&pdf).unwrap().page_count, 2);
         assert_eq!(read_pages(&pdf).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn pdf_jpeg_compressed_again_is_extracted_as_is() {
+        use flate2::write::ZlibEncoder;
+        use lopdf::{Object, Stream, dictionary};
+        let mut jpeg = Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgb8(image::RgbImage::new(4, 6))
+            .write_to(&mut jpeg, image::ImageFormat::Jpeg)
+            .unwrap();
+        let jpeg = jpeg.into_inner();
+        let mut enc = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&jpeg).unwrap();
+        let mut doc = lopdf::Document::with_version("1.3");
+        let img = doc.add_object(Stream::new(
+            dictionary! {
+                "Type" => "XObject",
+                "Subtype" => "Image",
+                "Width" => 4,
+                "Height" => 6,
+                "ColorSpace" => "DeviceRGB",
+                "BitsPerComponent" => 8,
+                "Filter" => vec![Object::Name(b"FlateDecode".to_vec()), Object::Name(b"DCTDecode".to_vec())],
+            },
+            enc.finish().unwrap(),
+        ));
+        let pages_id = doc.new_object_id();
+        let content = doc.add_object(Stream::new(dictionary! {}, b"q 4 0 0 6 0 0 cm /Im0 Do Q".to_vec()));
+        let page = doc.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => vec![0.into(), 0.into(), 4.into(), 6.into()],
+            "Contents" => content,
+            "Resources" => dictionary! { "XObject" => dictionary! { "Im0" => img } },
+        });
+        doc.objects.insert(pages_id, Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => vec![page.into()], "Count" => 1 }));
+        let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        doc.trailer.set("Root", catalog);
+        let dir = tempfile::tempdir().unwrap();
+        let pdf = dir.path().join("scan.pdf");
+        doc.save(&pdf).unwrap();
+        let pages = read_pages(&pdf).unwrap();
+        assert_eq!(pages[0].name, "P00001.jpg");
+        assert_eq!(pages[0].data, jpeg);
     }
 }
 
