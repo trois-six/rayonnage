@@ -79,11 +79,8 @@ pub fn run_profile(state: &State, name: &str) {
         widgets::alert(&state.window, t!("Incompatible settings"), &err);
         return;
     }
-    {
-        let mut s = state.settings.borrow_mut();
-        s.organizer.last_used = vec![name.to_string()];
-        let _ = s.save();
-    }
+    state.settings.borrow_mut().organizer.last_used = vec![name.to_string()];
+    state.save_settings();
     launch(state, books, vec![profile]);
 }
 
@@ -545,6 +542,9 @@ struct Editor {
     cur: Cell<usize>,
     loading: Cell<bool>,
     preview_book: Option<Book>,
+    /// The library as the organizer sees it, for the preview: built once,
+    /// not at each key typed in a template.
+    preview_library: Vec<Book>,
     // profiles to run, in order
     run_list: Rc<RefCell<Vec<(String, bool)>>>,
     run_box: gtk::ListBox,
@@ -1070,6 +1070,7 @@ impl Editor {
             profiles: RefCell::new(profiles),
             cur: Cell::new(cur),
             loading: Cell::new(false),
+            preview_library: if preview_book.is_some() { shadow(&state.library.borrow().books) } else { Vec::new() },
             preview_book,
             run_list: Rc::new(RefCell::new(run_list)),
             run_box,
@@ -1471,7 +1472,7 @@ impl Editor {
     fn refresh_preview(&self) {
         let p = self.current();
         let text = match &self.preview_book {
-            Some(b) => organizer::preview(&b.with_proposed(), &shadow(&self.state.library.borrow().books), &p),
+            Some(b) => organizer::preview(&b.with_proposed(), &self.preview_library, &p),
             None => String::new(),
         };
         self.preview.set_text(&text);
@@ -1663,11 +1664,13 @@ impl Editor {
         let parent = win.clone();
         widgets::choose_file(&win, t!("Import profiles"), move |path| {
             let Some(e) = w.upgrade() else { return };
-            let data = std::fs::read_to_string(&path).unwrap_or_default();
-            let imported: Vec<Profile> = serde_json::from_str::<Vec<Profile>>(&data)
-                .or_else(|_| serde_json::from_str::<Profile>(&data).map(|p| vec![p]))
-                .or_else(|_| serde_json::from_str::<OrganizerSettings>(&data).map(|s| s.profiles))
-                .unwrap_or_default();
+            let imported = match std::fs::read_to_string(&path) {
+                Ok(data) => organizer::profiles_from_json(&data),
+                Err(err) => {
+                    widgets::alert(&parent, t!("Import failed"), &format!("{}: {err}", path.display()));
+                    return;
+                }
+            };
             if imported.is_empty() {
                 widgets::alert(
                     &parent,

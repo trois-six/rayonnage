@@ -534,7 +534,7 @@ fn show(state: &State, books: Vec<Book>) {
                     st.selection.select_item(np as u32, true);
                     st.column_view.scroll_to(np as u32, None, gtk::ListScrollFlags::FOCUS, None);
                     win.close();
-                    if let Some(b) = st.selected_books().into_iter().next() {
+                    if let Some(b) = st.first_selected() {
                         show(&st, vec![b]);
                     }
                 }

@@ -470,8 +470,16 @@ pub struct Book {
     pub proposed_cache: ProposedCache,
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct ProposedCache(std::sync::OnceLock<(PathBuf, Proposed)>);
+/// The values proposed from the file name, for the file name they were
+/// computed from: recomputed when the file is renamed or moved.
+#[derive(Debug, Default)]
+pub struct ProposedCache(std::sync::RwLock<Option<(PathBuf, Proposed)>>);
+
+impl Clone for ProposedCache {
+    fn clone(&self) -> Self {
+        ProposedCache(std::sync::RwLock::new(self.0.read().ok().and_then(|c| c.clone())))
+    }
+}
 
 impl Default for Book {
     fn default() -> Self {
@@ -587,13 +595,16 @@ impl Book {
 
     pub fn proposed(&self) -> Proposed {
         let cache = &self.proposed_cache.0;
-        if let Some((path, p)) = cache.get()
+        if let Ok(c) = cache.read()
+            && let Some((path, p)) = &*c
             && *path == self.file_path
         {
             return p.clone();
         }
         let p = propose_from_filename(&self.file_stem());
-        let _ = cache.set((self.file_path.clone(), p.clone()));
+        if let Ok(mut c) = cache.write() {
+            *c = Some((self.file_path.clone(), p.clone()));
+        }
         p
     }
 

@@ -67,14 +67,6 @@ fn set_element(info: &mut ComicInfo, name: &str, value: &str) -> bool {
     true
 }
 
-fn get_element(info: &ComicInfo, field: Field) -> String {
-    let book = crate::model::Book {
-        info: info.clone(),
-        ..Default::default()
-    };
-    field.get(&book)
-}
-
 fn resolve_entity(name: &str) -> Option<char> {
     match name {
         "lt" => Some('<'),
@@ -229,8 +221,10 @@ pub fn to_xml(info: &ComicInfo) -> String {
     let mut s = String::from(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<ComicInfo xmlns:xsd=\"http://www.w3.org/2001/XMLSchema\" xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\">\n",
     );
+    // One book for every element (the fields are read through it).
+    let book = crate::model::Book { info: info.clone(), ..Default::default() };
     for (name, field) in ELEMENTS {
-        let v = get_element(info, *field);
+        let v = field.get(&book);
         if !v.is_empty() {
             s.push_str(&format!("  <{name}>{}</{name}>\n", escape(&v)));
         }

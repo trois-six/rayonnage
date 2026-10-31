@@ -264,4 +264,28 @@ pub static ENTRIES: &[(&str, &str)] = &[
         " — {0} book(s) with unwritten changes left alone: use \u{201c}Refresh (force reread)\u{201d} to discard the changes",
         " — {0} livre(s) aux modifications non écrites laissé(s) tel(s) quel(s) : utilisez « Rafraîchir (forcer la relecture) » pour annuler les modifications",
     ),
+    (
+        "{0}: the operation stopped on an internal error",
+        "{0} : l'opération s'est arrêtée sur une erreur interne",
+    ),
+    (
+        "The settings could not be saved: {0}",
+        "Les paramètres n'ont pas pu être enregistrés : {0}",
+    ),
+    (
+        "Changes could not be saved",
+        "Des modifications n'ont pas pu être enregistrées",
+    ),
+    (
+        "{0}\n\nQuit anyway? These changes will be lost.",
+        "{0}\n\nQuitter quand même ? Ces modifications seront perdues.",
+    ),
+    (
+        "Renaming…",
+        "Renommage…",
+    ),
+    (
+        "The book is no longer in the library",
+        "Le livre n'est plus dans la bibliothèque",
+    ),
 ];

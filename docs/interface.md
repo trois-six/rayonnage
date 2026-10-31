@@ -86,7 +86,7 @@ start.
 | Ctrl+Shift+N | Automatic Numbering |
 | Ctrl+B | Fetch Info from Bedetheque |
 | Ctrl+L | Organize Files |
-| Delete | Remove from Library (in the Pages tab: mark as deleted) |
+| Delete | Remove from Library, in the book list (in the Pages tab: mark as deleted) |
 | Ctrl+J | Message Log |
 | Ctrl+, | Settings |
 | Tab, Shift+Tab | Next, previous editable column while editing a cell |

@@ -15,14 +15,21 @@ use crate::library::moved_like;
 /// Runs `then` at once when every library folder exists; otherwise after
 /// asking where the missing ones are.
 pub fn check(state: &State, then: impl FnOnce(&State) + 'static) {
-    let missing: Vec<PathBuf> = state
-        .settings
-        .borrow()
-        .library_folders
-        .iter()
-        .filter(|f| !f.is_dir())
-        .cloned()
-        .collect();
+    // Checked in a thread: a share whose server does not answer can block
+    // for a long time.
+    let folders = state.settings.borrow().library_folders.clone();
+    let weak = Rc::downgrade(state);
+    glib::spawn_future_local(async move {
+        let missing = gtk::gio::spawn_blocking(move || folders.into_iter().filter(|f| !f.is_dir()).collect::<Vec<_>>())
+            .await
+            .unwrap_or_default();
+        if let Some(state) = weak.upgrade() {
+            ask(&state, missing, then);
+        }
+    });
+}
+
+fn ask(state: &State, missing: Vec<PathBuf>, then: impl FnOnce(&State) + 'static) {
     if missing.is_empty() {
         then(state);
         return;

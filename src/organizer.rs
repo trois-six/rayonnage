@@ -1027,7 +1027,7 @@ fn is_same_file(src: &Path, dest: &Path) -> bool {
 
 /// Changes only the case of a file name, through a temporary name: some
 /// case-insensitive drives ignore a direct rename to the same name.
-fn rename_case(src: &Path, dest: &Path) -> io::Result<()> {
+pub(crate) fn rename_case(src: &Path, dest: &Path) -> io::Result<()> {
     let tmp = crate::archive::temp_sibling(dest);
     fs::rename(src, &tmp)?;
     fs::rename(&tmp, dest).inspect_err(|_| {
@@ -3113,6 +3113,24 @@ pub fn run(
         .run(books, profiles, undo_path)
 }
 
+/// The profiles of an exported file: a list of profiles, one profile, the
+/// organizer settings, or the application settings. Any JSON object would
+/// read as a profile with default values: the shape is checked first.
+pub fn profiles_from_json(data: &str) -> Vec<Profile> {
+    use serde_json::Value;
+    let Ok(value) = serde_json::from_str::<Value>(data) else { return Vec::new() };
+    let settings = |v: &Value| serde_json::from_value::<OrganizerSettings>(v.clone()).map(|s| s.profiles).unwrap_or_default();
+    match &value {
+        Value::Array(_) => serde_json::from_value(value).unwrap_or_default(),
+        Value::Object(o) if o.contains_key("profiles") => settings(&value),
+        Value::Object(o) if o.get("organizer").is_some_and(|v| v.get("profiles").is_some()) => settings(&o["organizer"]),
+        Value::Object(o) if o.contains_key("file_template") || o.contains_key("folder_template") => {
+            serde_json::from_value(value).map(|p| vec![p]).unwrap_or_default()
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// The files moved by the last run, where they are now.
 pub fn undo_files(undo_path: &Path) -> Vec<PathBuf> {
     fs::read_to_string(undo_path)
@@ -3799,6 +3817,21 @@ mod tests {
         let left: Vec<UndoEntry> = serde_json::from_str(&fs::read_to_string(&undo_file).unwrap()).unwrap();
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].original, books[0].file_path);
+    }
+
+    #[test]
+    fn profiles_are_read_from_each_kind_of_file() {
+        let p = Profile { name: "BDs".into(), ..Default::default() };
+        let one = serde_json::to_string(&p).unwrap();
+        let list = serde_json::to_string(&vec![p.clone()]).unwrap();
+        let settings = serde_json::to_string(&OrganizerSettings { profiles: vec![p.clone()], last_used: vec![] }).unwrap();
+        let app = format!(r#"{{"library_folders": [], "organizer": {settings}}}"#);
+        for json in [&one, &list, &settings, &app] {
+            let read = profiles_from_json(json);
+            assert_eq!(read.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["BDs"], "{json}");
+        }
+        assert!(profiles_from_json(r#"{"theme": "Dark"}"#).is_empty());
+        assert!(profiles_from_json("not json").is_empty());
     }
 
     #[test]

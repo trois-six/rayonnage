@@ -109,13 +109,23 @@ pub fn open(state: &State) {
                 widgets::alert(&win, t!("“rar” program not found"), t!("Creating CBR files requires the \"rar\" program (WinRAR / RAR for Linux and macOS). Install it or set its path in the settings."));
                 return;
             }
-            {
-                let mut s = st.settings.borrow_mut();
-                s.split = options.clone();
-                let _ = s.save();
-            }
+            st.settings.borrow_mut().split = options.clone();
+            st.save_settings();
             win.close();
-            run(&st, books.clone(), options);
+            // Deleting the packs asks first, as a conversion deleting its
+            // originals does.
+            if options.delete_pack && st.settings.borrow().confirm_convert {
+                let (st2, books) = (st.clone(), books.clone());
+                widgets::confirm(
+                    &st.window,
+                    t!("Delete the packs?"),
+                    t!("Each pack will be deleted once its albums are written."),
+                    t!("Split"),
+                    move || run(&st2, books, options),
+                );
+            } else {
+                run(&st, books.clone(), options);
+            }
         }
     ));
     buttons.append(&cancel);

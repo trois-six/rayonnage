@@ -1,6 +1,7 @@
 # Documentation Update Log
 
 ## 2026-10-31
+* **Update**: [Interface §4](interface.md), [Bedetheque §2](bedetheque.md) — Delete acts in the book list only; Enter chooses and a double-click opens the page in the Bedetheque chooser; edition links.
 * **Update**: [Architecture](architecture.md) — bedetheque.com pages are read with `regex`, not `scraper`.
 * **Update**: [File Organization §3](organizer.md#3-profiles) — safety of the files when moving, copying and overwriting; undo kept for what could not be put back.
 * **Update**: [Library §3](library.md#3-scanning) — the scan reads the folders changed most recently first.

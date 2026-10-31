@@ -178,6 +178,11 @@ impl Library {
         self.index = self.books.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
     }
 
+    /// Whether the library could not be loaded, and is never saved.
+    pub fn is_read_only(&self) -> bool {
+        self.load_error.is_some()
+    }
+
     /// What went wrong when loading the library, to tell the user.
     pub fn load_problem(&self) -> Option<String> {
         if let Some(e) = &self.load_error {
@@ -603,11 +608,25 @@ impl Work {
     }
 }
 
+/// What a scan needs of a library book: its file.
+pub struct KnownFile {
+    pub id: u64,
+    pub file_path: PathBuf,
+    pub file_size: u64,
+    pub file_modified: Option<DateTime<Local>>,
+}
+
+impl From<&Book> for KnownFile {
+    fn from(b: &Book) -> Self {
+        KnownFile { id: b.id, file_path: b.file_path.clone(), file_size: b.file_size, file_modified: b.file_modified }
+    }
+}
+
 /// Scans the folders (worker thread). `known` holds the library books. New
 /// and modified files are read by `threads` threads at the same time.
 pub fn scan(
     folders: Vec<PathBuf>,
-    known: Vec<Book>,
+    known: Vec<KnownFile>,
     threads: usize,
     cancelled: impl Fn() -> bool + Sync,
     mut send: impl FnMut(ScanEvent),
@@ -617,7 +636,7 @@ pub fn scan(
         send(ScanEvent::Finished { missing: Vec::new(), cancelled: true });
         return;
     }
-    let by_path: HashMap<&Path, &Book> = known.iter().map(|b| (b.file_path.as_path(), b)).collect();
+    let by_path: HashMap<&Path, &KnownFile> = known.iter().map(|b| (b.file_path.as_path(), b)).collect();
     let found: HashSet<&Path> = walk.books.iter().map(|f| f.path.as_path()).collect();
     let (gone, lost) = gone_books(&folders, &walk, &known, &found);
     // A book whose file is gone follows it when it was renamed or moved.
@@ -747,9 +766,9 @@ pub fn scan(
 fn gone_books<'a>(
     folders: &[PathBuf],
     walk: &WalkResult,
-    known: &'a [Book],
+    known: &'a [KnownFile],
     found: &HashSet<&Path>,
-) -> (Vec<&'a Book>, Vec<&'a Book>) {
+) -> (Vec<&'a KnownFile>, Vec<&'a KnownFile>) {
     let available: Vec<&PathBuf> = folders
         .iter()
         .filter(|f| f.is_dir() && walk.books.iter().any(|b| b.path.starts_with(f)))
@@ -777,7 +796,7 @@ pub fn is_missing(path: &Path) -> bool {
 /// Whether a book file found by the scan is the file of `book`, renamed or
 /// moved: same size and same modification date. A copy to another drive
 /// may keep the date only to the second (FAT: two seconds).
-fn same_file(book: &Book, f: &FoundFile) -> bool {
+fn same_file(book: &KnownFile, f: &FoundFile) -> bool {
     let (Some(a), Some(b)) = (book.file_modified, f.modified) else { return false };
     let b = DateTime::<Local>::from(b);
     book.file_size > 0 && book.file_size == f.size && (a - b).num_milliseconds().abs() <= 2000
@@ -789,16 +808,16 @@ fn same_file(book: &Book, f: &FoundFile) -> bool {
 /// library). Only unambiguous pairs are kept; between several candidates,
 /// the one with the same file name wins.
 fn find_moves<'a, 'f>(
-    gone: &[&'a Book],
-    lost: &[&'a Book],
+    gone: &[&'a KnownFile],
+    lost: &[&'a KnownFile],
     files: &'f [FoundFile],
-    by_path: &HashMap<&Path, &Book>,
-) -> Vec<(&'a Book, &'f FoundFile)> {
-    let candidates: Vec<&Book> = gone.iter().chain(lost).copied().collect();
+    by_path: &HashMap<&Path, &KnownFile>,
+) -> Vec<(&'a KnownFile, &'f FoundFile)> {
+    let candidates: Vec<&KnownFile> = gone.iter().chain(lost).copied().collect();
     if candidates.is_empty() {
         return Vec::new();
     }
-    let mut by_size: HashMap<u64, Vec<&Book>> = HashMap::new();
+    let mut by_size: HashMap<u64, Vec<&KnownFile>> = HashMap::new();
     for b in &candidates {
         by_size.entry(b.file_size).or_default().push(b);
     }
@@ -814,7 +833,7 @@ fn find_moves<'a, 'f>(
             Some(_) => continue,
         };
         let Some(books) = by_size.get(&f.size) else { continue };
-        let mut matches: Vec<&Book> = books.iter().copied().filter(|b| same_file(b, f)).collect();
+        let mut matches: Vec<&KnownFile> = books.iter().copied().filter(|b| same_file(b, f)).collect();
         if matches.len() > 1 || known {
             matches.retain(|b| b.file_path.file_name() == f.path.file_name());
         }
@@ -943,6 +962,7 @@ mod tests {
     /// Runs a scan; returns (moved: (id, new path), added, missing).
     fn scan_moves(folders: Vec<PathBuf>, known: Vec<Book>) -> (Vec<(u64, PathBuf)>, Vec<PathBuf>, Vec<u64>) {
         let (mut moved, mut added, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+        let known = known.iter().map(KnownFile::from).collect();
         scan(folders, known, 2, || false, |ev| match ev {
             ScanEvent::Changed(BookChange::Moved { id, to, .. }) => moved.push((id, to)),
             ScanEvent::Added(b) => added.push(b.file_path),

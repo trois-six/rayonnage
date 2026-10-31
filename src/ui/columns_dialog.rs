@@ -48,7 +48,7 @@ pub fn open(state: &State) {
         win,
         move |_| {
             save_columns(&st);
-            let _ = st.settings.borrow().save();
+            st.save_settings();
             win.close();
         }
     ));

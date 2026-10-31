@@ -228,11 +228,15 @@ fn rebuild_folders(list: &gtk::ListBox, folders: &Rc<RefCell<Vec<PathBuf>>>) {
         let del = gtk::Button::from_icon_name("list-remove-symbolic");
         del.set_tooltip_text(Some(t!("Remove this folder")));
         let folders = folders.clone();
-        let list2 = list.clone();
-        del.connect_clicked(move |_| {
-            folders.borrow_mut().remove(i);
-            rebuild_folders(&list2, &folders);
-        });
+        // Weak: the list owns this button.
+        del.connect_clicked(glib::clone!(
+            #[weak]
+            list,
+            move |_| {
+                folders.borrow_mut().remove(i);
+                rebuild_folders(&list, &folders);
+            }
+        ));
         row.append(&l);
         if !f.is_dir() {
             let warn = gtk::Image::from_icon_name("dialog-warning-symbolic");

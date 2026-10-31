@@ -67,6 +67,7 @@ pub struct AppState {
     sidebar: gtk::ListBox,
     sources: RefCell<Vec<Source>>,
     source: RefCell<Source>,
+    /// The search, lowercase.
     search_text: RefCell<String>,
     status: gtk::Label,
     /// One line per operation, running or waiting.
@@ -245,8 +246,33 @@ pub fn build_ui(app: &gtk::Application) {
                 s.window_width = w.default_width();
                 s.window_height = w.default_height();
             }
-            let _ = state.settings.borrow().save();
-            state.flush_library();
+            // What could not be saved is lost on quitting: the user decides.
+            let settings_error = state.settings.borrow().save().err();
+            // A library that could not be loaded is never saved, as told at
+            // startup.
+            let library_error = {
+                let mut lib = state.library.borrow_mut();
+                if lib.is_read_only() { None } else { lib.save().err() }
+            };
+            let errors: Vec<String> =
+                [settings_error, library_error].into_iter().flatten().map(|e| format!("{e:#}")).collect();
+            if !errors.is_empty() && !state.quitting.get() {
+                for e in &errors {
+                    state.journal.error(e);
+                }
+                let st = state.clone();
+                widgets::confirm(
+                    w,
+                    t!("Changes could not be saved"),
+                    &t!("{0}\n\nQuit anyway? These changes will be lost.", errors.join("\n")),
+                    t!("Quit"),
+                    move || {
+                        st.quitting.set(true);
+                        st.window.close();
+                    },
+                );
+                return glib::Propagation::Stop;
+            }
             glib::Propagation::Proceed
         }
     ));
@@ -272,6 +298,7 @@ pub fn build_ui(app: &gtk::Application) {
     }
 }
 
+/// Whether every word of `text` (lowercase) is in one of the searched fields.
 fn matches_search(b: &Book, text: &str) -> bool {
     if text.is_empty() {
         return true;
@@ -292,12 +319,8 @@ fn matches_search(b: &Book, text: &str) -> bool {
         Field::FileName,
         Field::Year,
     ]
-    .iter()
-    .map(|f| f.get(b))
-    .collect::<Vec<_>>()
-    .join("\u{1}")
-    .to_lowercase();
-    text.to_lowercase().split_whitespace().all(|w| hay.contains(w))
+    .map(|f| f.get(b).to_lowercase());
+    text.split_whitespace().all(|w| hay.iter().any(|h| h.contains(w)))
 }
 
 fn fill_store(state: &State) {
@@ -482,8 +505,18 @@ fn build_layout(state: &State) -> gtk::Box {
         #[weak]
         state,
         move |e| {
-            state.search_text.replace(e.text().trim().to_string());
-            state.filter.changed(gtk::FilterChange::Different);
+            let text = e.text().trim().to_lowercase();
+            let old = state.search_text.replace(text.clone());
+            // Typing more only narrows the list: GTK then only filters the
+            // rows still shown.
+            let change = if text.starts_with(&old) {
+                gtk::FilterChange::MoreStrict
+            } else if old.starts_with(&text) {
+                gtk::FilterChange::LessStrict
+            } else {
+                gtk::FilterChange::Different
+            };
+            state.filter.changed(change);
             update_status(&state);
         }
     ));
@@ -562,6 +595,14 @@ fn build_layout(state: &State) -> gtk::Box {
         }
     ));
     state.column_view.add_controller(click);
+    // Delete in the book list only: as an application shortcut, it would
+    // take the key from the search field and the cell editor.
+    let keys = gtk::ShortcutController::new();
+    keys.add_shortcut(gtk::Shortcut::new(
+        gtk::ShortcutTrigger::parse_string("Delete"),
+        Some(gtk::NamedAction::new("win.remove")),
+    ));
+    state.column_view.add_controller(keys);
 
     // Info panel
     state.info_panel.set_visible(state.settings.borrow().show_info_panel);
@@ -652,7 +693,10 @@ fn file_section() -> gio::Menu {
     let m = gio::Menu::new();
     m.append(Some(t!("Open Book")), Some("win.open-file"));
     m.append(Some(t!("Open Containing Folder")), Some("win.open-folder"));
-    m.append(Some(t!("Remove from Library")), Some("win.remove"));
+    let remove = gio::MenuItem::new(Some(t!("Remove from Library")), Some("win.remove"));
+    // Shown in the menu; the key itself only works in the book list.
+    remove.set_attribute_value("accel", Some(&"Delete".to_variant()));
+    m.append_item(&remove);
     m
 }
 
@@ -765,7 +809,6 @@ fn build_actions(app: &gtk::Application, state: &State) {
     app.set_accels_for_action("win.autonumber", &["<Control><Shift>n"]);
     app.set_accels_for_action("win.bd-scrape", &["<Control>b"]);
     app.set_accels_for_action("win.organize", &["<Control>l"]);
-    app.set_accels_for_action("win.remove", &["Delete"]);
 }
 
 pub fn refresh_sidebar(state: &State) {
@@ -819,18 +862,18 @@ fn update_info_panel(state: &State) {
     if !state.info_panel.is_visible() {
         return;
     }
-    let books = state.selected_books();
+    let count = state.selection.selection().size();
     let generation = state.info_generation.get() + 1;
     state.info_generation.set(generation);
-    let Some(book) = books.first().cloned() else {
+    let Some(book) = state.first_selected() else {
         state.info_cover.set_paintable(None::<&gdk::Paintable>);
         state.info_text.set_text("");
         return;
     };
     let esc = |s: &str| glib::markup_escape_text(s).to_string();
     let mut text = format!("<b>{}</b>\n", esc(&book.caption()));
-    if books.len() > 1 {
-        text.push_str(&format!("<i>{}</i>\n", t!("{0} books selected", books.len())));
+    if count > 1 {
+        text.push_str(&format!("<i>{}</i>\n", t!("{0} books selected", count)));
     }
     text.push('\n');
     for f in [
@@ -859,22 +902,30 @@ fn update_info_panel(state: &State) {
         text.push_str(&format!("\n{}", esc(&book.info.summary)));
     }
     state.info_text.set_markup(&text);
-    state.info_cover.set_paintable(None::<&gdk::Paintable>);
 
-    let (tx, rx) = async_channel::bounded::<Option<Vec<u8>>>(1);
-    std::thread::spawn(move || {
-        let _ = tx.send_blocking(library::thumbnail(&book, 400).ok());
-    });
+    // The cover is read a moment later, once the selection settles: moving
+    // through the list with the arrow keys would otherwise open one book
+    // file after another, on a network drive.
     let weak = Rc::downgrade(state);
-    glib::spawn_future_local(async move {
-        let Ok(Some(data)) = rx.recv().await else { return };
+    glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
         let Some(st) = weak.upgrade() else { return };
         if st.info_generation.get() != generation {
             return;
         }
-        if let Ok(tex) = gdk::Texture::from_bytes(&glib::Bytes::from_owned(data)) {
-            st.info_cover.set_paintable(Some(&tex));
-        }
+        let (tx, rx) = async_channel::bounded::<Option<Vec<u8>>>(1);
+        std::thread::spawn(move || {
+            let _ = tx.send_blocking(library::thumbnail(&book, 400).ok());
+        });
+        glib::spawn_future_local(async move {
+            let Ok(Some(data)) = rx.recv().await else { return };
+            let Some(st) = weak.upgrade() else { return };
+            if st.info_generation.get() != generation {
+                return;
+            }
+            if let Ok(tex) = gdk::Texture::from_bytes(&glib::Bytes::from_owned(data)) {
+                st.info_cover.set_paintable(Some(&tex));
+            }
+        });
     });
 }
 
@@ -899,6 +950,16 @@ impl AppState {
     }
 
     /// Writes the books changed since the last save (nothing when none).
+    /// Saves the settings. A failure is shown: the changes would otherwise
+    /// be lost without a word.
+    pub fn save_settings(&self) {
+        if let Err(e) = self.settings.borrow().save() {
+            let m = t!("The settings could not be saved: {0}", format!("{e:#}"));
+            self.journal.error(&m);
+            widgets::alert(&self.window, t!("Error"), &m);
+        }
+    }
+
     pub fn flush_library(&self) {
         if let Err(e) = self.library.borrow_mut().save() {
             self.journal.error(&format!("{e:#}"));
@@ -906,21 +967,28 @@ impl AppState {
         }
     }
 
+    /// Positions of the selected rows, in list order.
+    fn selected_positions(&self) -> Vec<u32> {
+        let sel = self.selection.selection();
+        match gtk::BitsetIter::init_first(&sel) {
+            Some((rest, first)) => std::iter::once(first).chain(rest).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn book_at(&self, position: u32) -> Option<Book> {
+        self.sort_model.item(position).and_downcast::<BookObject>().map(|o| o.book().clone())
+    }
+
     /// Selected books, in display order.
     pub fn selected_books(&self) -> Vec<Book> {
-        let mut out = Vec::new();
+        self.selected_positions().into_iter().filter_map(|i| self.book_at(i)).collect()
+    }
+
+    /// The first selected book, without copying the others.
+    pub fn first_selected(&self) -> Option<Book> {
         let sel = self.selection.selection();
-        if sel.is_empty() {
-            return out;
-        }
-        for i in 0..self.sort_model.n_items() {
-            if sel.contains(i)
-                && let Some(o) = self.sort_model.item(i).and_downcast::<BookObject>()
-            {
-                out.push(o.book().clone());
-            }
-        }
-        out
+        if sel.is_empty() { None } else { self.book_at(sel.minimum()) }
     }
 
     /// Replaces books (matched by id) in the library and the list.
@@ -1055,11 +1123,29 @@ impl AppState {
         // The list is replaced at once: removing the items one by one sorts
         // and filters the list again after each one.
         let ids: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        let selected: std::collections::HashSet<u64> = self
+            .selected_positions()
+            .into_iter()
+            .filter_map(|i| self.sort_model.item(i).and_downcast::<BookObject>())
+            .map(|o| o.id())
+            .collect();
         let kept: Vec<BookObject> = (0..self.store.n_items())
             .filter_map(|i| self.store.item(i).and_downcast::<BookObject>())
             .filter(|o| !ids.contains(&o.id()))
             .collect();
         self.store.splice(0, self.store.n_items(), &kept);
+        // The splice replaces every row, which clears the selection: the
+        // books still there are selected again.
+        if !selected.is_empty() {
+            let positions = gtk::Bitset::new_empty();
+            for i in 0..self.sort_model.n_items() {
+                if self.sort_model.item(i).and_downcast::<BookObject>().is_some_and(|o| selected.contains(&o.id())) {
+                    positions.add(i);
+                }
+            }
+            let all = gtk::Bitset::new_range(0, self.sort_model.n_items());
+            self.selection.set_selection(&positions, &all);
+        }
     }
 
     fn resort(&self) {
@@ -1104,7 +1190,7 @@ pub fn scan(state: &State) {
 
 fn scan_folders(state: &State) {
     let folders = state.settings.borrow().library_folders.clone();
-    let known = state.library.borrow().books.clone();
+    let known: Vec<library::KnownFile> = state.library.borrow().books.iter().map(library::KnownFile::from).collect();
     let threads = state.settings.borrow().scan_threads.max(1);
     for f in &folders {
         state.journal.info(&t!("Folder to scan: {0}", f.display()));

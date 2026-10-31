@@ -299,7 +299,7 @@ fn column_of(st: &AppState, field: Field) -> Option<gtk::ColumnViewColumn> {
 
 /// F2: edits the first editable visible column of the selected book.
 pub fn edit_selection(st: &State) {
-    let Some(book) = st.selected_books().into_iter().next() else { return };
+    let Some(book) = st.first_selected() else { return };
     if let Some(field) = next_column(st, None, 1) {
         start_edit(st, book.id, field);
     }
@@ -685,7 +685,7 @@ fn apply(st: &State, book: u64, field: Field, text: &str) {
 
 /// Renames the book file (the extension is kept).
 fn rename(st: &State, id: u64, text: &str) {
-    let Some(mut book) = st.library.borrow().get(id).cloned() else { return };
+    let Some(book) = st.library.borrow().get(id).cloned() else { return };
     let ext = book.file_path.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
     let mut name = text.trim().to_string();
     if !ext.is_empty() && !name.to_lowercase().ends_with(&format!(".{}", ext.to_lowercase())) {
@@ -695,30 +695,49 @@ fn rename(st: &State, id: u64, text: &str) {
         st.journal.error(&t!("Invalid file name: {0}", name));
         return;
     }
-    let dest = book.file_path.with_file_name(&name);
-    if dest == book.file_path {
+    if book.file_path.file_name().is_some_and(|n| n == name.as_str()) {
         return;
     }
-    let case_only = dest.to_string_lossy().to_lowercase() == book.file_path.to_string_lossy().to_lowercase();
-    if dest.exists() && !case_only {
-        let msg = t!("A file named {0} already exists", name);
-        st.journal.error(&msg);
-        super::widgets::alert(&st.window, t!("Rename"), &msg);
-        return;
-    }
-    match std::fs::rename(&book.file_path, &dest) {
-        Ok(()) => {
-            st.journal.info(&t!("Renamed: {0} → {1}", book.file_path.display(), dest.display()));
-            book.file_path = dest;
-            book.refresh_file_stats();
-            st.update_books(vec![book], false);
-        }
-        Err(e) => {
-            let msg = t!("{0}: {1}", book.file_path.display(), e);
-            st.journal.error(&msg);
-            super::widgets::alert(&st.window, t!("Rename"), &msg);
-        }
-    }
+    // Done in the background, as an organization (the file may be on a
+    // network drive, and an operation may be writing it).
+    super::run_job_with(
+        st,
+        super::JobKind::Organize,
+        vec![id],
+        t!("Renaming…"),
+        move |st| st.library.borrow().get(id).map(|b| b.file_path.clone()),
+        move |from, _ctx| {
+            let from = from.ok_or_else(|| t!("The book is no longer in the library").to_string())?;
+            let dest = from.with_file_name(&name);
+            let case_only = dest.to_string_lossy().to_lowercase() == from.to_string_lossy().to_lowercase();
+            let renamed = if case_only {
+                crate::organizer::rename_case(&from, &dest)
+            } else if dest.try_exists().unwrap_or(true) {
+                return Err(t!("A file named {0} already exists", name));
+            } else {
+                std::fs::rename(&from, &dest)
+            };
+            renamed.map_err(|e| t!("{0}: {1}", from.display(), e))?;
+            Ok((from, dest))
+        },
+        move |st, result: Result<(std::path::PathBuf, std::path::PathBuf), String>| match result {
+            Ok((from, dest)) => {
+                st.journal.info(&t!("Renamed: {0} → {1}", from.display(), dest.display()));
+                // A rename keeps the size and dates of the file.
+                st.edit_books([id], |b| {
+                    let same = b.file_path == from;
+                    if same {
+                        b.file_path = dest.clone();
+                    }
+                    same
+                });
+            }
+            Err(msg) => {
+                st.journal.error(&msg);
+                super::widgets::alert(&st.window, t!("Rename"), &msg);
+            }
+        },
+    );
 }
 
 /// ComicRack's clamping for 1-based values: going below 1 clears the value

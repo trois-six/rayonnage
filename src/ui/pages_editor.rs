@@ -113,7 +113,17 @@ impl PagesEditor {
         ed.build();
         let first = ed.rows.borrow().first().map(|r| r.info.image);
         ed.rebuild(&first.into_iter().collect());
-        ed.load_thumbnails();
+        // The pages are read when the tab is first shown, not each time the
+        // dialog opens: that reads the whole book, over the network maybe.
+        let weak = Rc::downgrade(&ed);
+        let loaded = Cell::new(false);
+        ed.widget.connect_map(move |_| {
+            if !loaded.replace(true)
+                && let Some(ed) = weak.upgrade()
+            {
+                ed.load_thumbnails();
+            }
+        });
         ed
     }
 
@@ -289,19 +299,27 @@ impl PagesEditor {
         popover.set_has_arrow(false);
         popover.set_halign(gtk::Align::Start);
         let click = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();
-        let list = self.list.clone();
-        click.connect_pressed(move |_, _, x, y| {
-            // Right click on an unselected page selects it alone.
-            if let Some(row) = list.row_at_y(y as i32)
-                && !row.is_selected()
-            {
-                list.unselect_all();
-                list.select_row(Some(&row));
+        // Weak: the list owns this handler.
+        click.connect_pressed(glib::clone!(
+            #[weak(rename_to = list)]
+            self.list,
+            #[weak]
+            popover,
+            move |_, _, x, y| {
+                // Right click on an unselected page selects it alone.
+                if let Some(row) = list.row_at_y(y as i32)
+                    && !row.is_selected()
+                {
+                    list.unselect_all();
+                    list.select_row(Some(&row));
+                }
+                popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
+                popover.popup();
             }
-            popover.set_pointing_to(Some(&gdk::Rectangle::new(x as i32, y as i32, 1, 1)));
-            popover.popup();
-        });
+        ));
         self.list.add_controller(click);
+        // A popover is not removed with its parent.
+        self.list.connect_destroy(move |_| popover.unparent());
     }
 
     /// Dropping pages on a row moves them before it (or after it, in its

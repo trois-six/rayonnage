@@ -34,7 +34,11 @@ library like any edit, then into the files when they are updated
   name, then the album from its number, then the edition.
 - When the result is ambiguous (several series, albums or editions), a
   dialog asks the user to choose, skips the book, or chooses on its own
-  after a delay, depending on the settings (§4).
+  after a delay, depending on the settings (§4). In the list, Enter
+  chooses the selected item and a double-click opens its page in the
+  browser.
+- A link to an edition other than the first (ending with `#` and its id)
+  gives that edition.
 - **Books → Fetch Info from a Bedetheque Link…** takes the URL of an album,
   a series or a magazine on bedetheque.com and applies it to the selected
   books.

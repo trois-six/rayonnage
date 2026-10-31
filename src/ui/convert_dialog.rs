@@ -338,10 +338,12 @@ pub fn open(state: &State) {
                         return;
                     }
                     let preset = form.get(&n);
-                    let mut s = state.settings.borrow_mut();
-                    s.export_presets.retain(|p| p.name != n);
-                    s.export_presets.push(preset);
-                    let _ = s.save();
+                    {
+                        let mut s = state.settings.borrow_mut();
+                        s.export_presets.retain(|p| p.name != n);
+                        s.export_presets.push(preset);
+                    }
+                    state.save_settings();
                     dlg.close();
                 }
             ));
@@ -367,11 +369,8 @@ pub fn open(state: &State) {
                 widgets::alert(&win, t!("Missing folder"), t!("Choose the destination folder."));
                 return;
             }
-            {
-                let mut set = st.settings.borrow_mut();
-                set.export = s.clone();
-                let _ = set.save();
-            }
+            st.settings.borrow_mut().export = s.clone();
+            st.save_settings();
             win.close();
             run_export_books(&st, s, books.clone());
         }

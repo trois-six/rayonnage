@@ -459,14 +459,27 @@ pub fn read_cover(path: &Path) -> Result<Page> {
 
 /// Reads the image number `index` of the file (file order).
 pub fn read_page(path: &Path, index: usize) -> Result<Page> {
-    read_pages_filtered(path, Some(index + 1))?
+    read_pages_filtered(path, Some(index..index + 1))?
         .into_iter()
-        .nth(index)
+        .next()
         .ok_or_else(|| anyhow!(t!("No page found")))
 }
 
-fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
+/// The pages of the book, in reading order; with `range`, only those pages
+/// are read from the archives that allow it (a cover does not read the
+/// pages before it).
+fn read_pages_filtered(path: &Path, range: Option<std::ops::Range<usize>>) -> Result<Vec<Page>> {
     let fmt = open_format(path)?;
+    // Keeps the names of the pages in `range` (names already in order).
+    let pick = |names: &mut Vec<String>| {
+        if let Some(r) = &range {
+            let end = r.end.min(names.len());
+            let start = r.start.min(end);
+            names.truncate(end);
+            names.drain(..start);
+        }
+    };
+    let limit = range.as_ref().map(|r| r.end);
     let mut pages = match fmt {
         BookFormat::Zip => {
             let mut zip = zip::ZipArchive::new(BufReader::new(File::open(path)?))?;
@@ -476,27 +489,26 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
                 .filter(|n| is_image_name(n))
                 .collect();
             sort_pages(&mut names);
-            if let Some(l) = limit {
-                names.truncate(l);
-            }
+            pick(&mut names);
             let mut out = Vec::with_capacity(names.len());
             for n in names {
                 let mut f = zip.by_name(&n)?;
-                let mut data = Vec::with_capacity(f.size() as usize);
+                let mut data = Vec::new();
                 f.read_to_end(&mut data)?;
                 out.push(Page { name: n, data });
             }
             out
         }
         BookFormat::Rar => {
-            let wanted: Option<std::collections::HashSet<String>> = limit.map(|l| {
+            let wanted: Option<std::collections::HashSet<String>> = range.as_ref().map(|_| {
                 let mut names: Vec<String> = rar_list(path)
                     .unwrap_or_default()
                     .into_iter()
                     .filter(|n| is_image_name(n))
                     .collect();
                 sort_pages(&mut names);
-                names.into_iter().take(l).collect()
+                pick(&mut names);
+                names.into_iter().collect()
             });
             rar_read(path, &|n| {
                 is_image_name(n) && wanted.as_ref().is_none_or(|w| w.contains(n))
@@ -506,7 +518,7 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
             let mut r = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty())
                 .map_err(|e| anyhow!("{e}"))?;
             let mut out = Vec::new();
-            if let Some(l) = limit {
+            if range.is_some() {
                 let mut names: Vec<String> = r
                     .archive()
                     .files
@@ -515,14 +527,15 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
                     .map(|f| f.name.clone())
                     .collect();
                 sort_pages(&mut names);
-                for n in names.into_iter().take(l) {
+                pick(&mut names);
+                for n in names {
                     let data = r.read_file(&n).map_err(|e| anyhow!("{e}"))?;
                     out.push(Page { name: n, data });
                 }
             } else {
                 r.for_each_entries(|entry, reader| {
                     if !entry.is_directory && is_image_name(&entry.name) {
-                        let mut data = Vec::with_capacity(entry.size as usize);
+                        let mut data = Vec::new();
                         reader.read_to_end(&mut data)?;
                         out.push(Page {
                             name: entry.name.clone(),
@@ -538,12 +551,30 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
             out
         }
         BookFormat::Tar => {
+            // With a range, the names are listed first (the data skipped),
+            // then only those pages read.
+            let wanted: Option<std::collections::HashSet<String>> = match &range {
+                Some(_) => {
+                    let mut ar = tar::Archive::new(BufReader::new(File::open(path)?));
+                    let mut names = Vec::new();
+                    for e in ar.entries_with_seek()? {
+                        let name = e?.path()?.to_string_lossy().into_owned();
+                        if is_image_name(&name) {
+                            names.push(name);
+                        }
+                    }
+                    sort_pages(&mut names);
+                    pick(&mut names);
+                    Some(names.into_iter().collect())
+                }
+                None => None,
+            };
             let mut out = Vec::new();
             let mut ar = tar::Archive::new(BufReader::new(File::open(path)?));
-            for e in ar.entries()? {
+            for e in ar.entries_with_seek()? {
                 let mut e = e?;
                 let name = e.path()?.to_string_lossy().into_owned();
-                if is_image_name(&name) {
+                if is_image_name(&name) && wanted.as_ref().is_none_or(|w| w.contains(&name)) {
                     let mut data = Vec::new();
                     e.read_to_end(&mut data)?;
                     out.push(Page { name, data });
@@ -565,13 +596,11 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
                     .collect();
                 sort_pages(&mut names);
             }
-            if let Some(l) = limit {
-                names.truncate(l);
-            }
+            pick(&mut names);
             let mut out = Vec::with_capacity(names.len());
             for n in names {
                 let mut f = zip.by_name(&n)?;
-                let mut data = Vec::with_capacity(f.size() as usize);
+                let mut data = Vec::new();
                 f.read_to_end(&mut data)?;
                 out.push(Page { name: n, data });
             }
@@ -582,8 +611,12 @@ fn read_pages_filtered(path: &Path, limit: Option<usize>) -> Result<Vec<Page>> {
     if !matches!(fmt, BookFormat::Pdf | BookFormat::Djvu | BookFormat::Epub) {
         pages.sort_by(|a, b| natural_cmp(&a.name, &b.name));
     }
-    if let Some(l) = limit {
-        pages.truncate(l);
+    // PDF and DjVu read the pages up to the end of the range.
+    if matches!(fmt, BookFormat::Pdf | BookFormat::Djvu)
+        && let Some(r) = &range
+    {
+        pages.truncate(r.end);
+        pages.drain(..r.start.min(pages.len()));
     }
     Ok(pages)
 }
@@ -1394,6 +1427,8 @@ mod tests {
             let read = read_pages(&dest).unwrap();
             assert_eq!(read[0].name, "p2.png");
             assert_eq!(read_cover(&dest).unwrap().name, "p2.png");
+            assert_eq!(read_page(&dest, 1).unwrap().name, "p10.png", "{fmt:?}");
+            assert!(read_page(&dest, 2).is_err());
             let mut info2 = info.clone();
             info2.title = "Nouveau".into();
             write_comic_info(&dest, &info2).unwrap();

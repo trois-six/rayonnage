@@ -175,4 +175,12 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("{0}: album {1}/{2} {3}", "{0} : album {1}/{2} {3}"),
     ("Created: {0}", "Créé : {0}"),
     ("{0} album(s) created from {1} pack(s)", "{0} album(s) créé(s) à partir de {1} pack(s)"),
+    (
+        "Delete the packs?",
+        "Supprimer les packs ?",
+    ),
+    (
+        "Each pack will be deleted once its albums are written.",
+        "Chaque pack sera supprimé une fois ses albums écrits.",
+    ),
 ];

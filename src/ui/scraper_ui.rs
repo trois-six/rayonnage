@@ -575,6 +575,8 @@ fn choice_dialog(
     content.append(&filter);
     let list = gtk::ListBox::new();
     list.set_selection_mode(gtk::SelectionMode::Single);
+    // A click selects; a double-click opens the page, Enter chooses.
+    list.set_activate_on_single_click(false);
     content.append(&widgets::scrolled(&list));
     let countdown = gtk::Label::builder().xalign(0.0).visible(timeout_secs.is_some()).build();
     countdown.add_css_class("dim-label");
@@ -690,27 +692,40 @@ fn choice_dialog(
         finish,
         move |_| finish(None)
     ));
+    // Set by a double-click, which then activates the row.
+    let double_click = Rc::new(Cell::new(false));
     list.connect_row_activated(glib::clone!(
         #[weak]
         win,
+        #[weak]
+        ok,
         #[strong]
         candidates,
         #[strong]
         shown,
         #[strong]
         timer_on,
+        #[strong]
+        double_click,
         move |_, row| {
             timer_on.set(false);
-            if let Some(c) = shown.borrow().get(row.index() as usize).and_then(|&i| candidates.get(i)) {
+            if !double_click.replace(false) {
+                ok.emit_clicked();
+            } else if let Some(c) = shown.borrow().get(row.index() as usize).and_then(|&i| candidates.get(i)) {
                 gtk::UriLauncher::new(&c.url).launch(Some(&win), gio::Cancellable::NONE, |_| {});
             }
         }
     ));
     let click = gtk::GestureClick::new();
+    // Before the list's own handling, which activates the row.
+    click.set_propagation_phase(gtk::PropagationPhase::Capture);
     click.connect_pressed(glib::clone!(
         #[strong]
         timer_on,
-        move |_, _, _, _| timer_on.set(false)
+        move |_, n_press, _, _| {
+            timer_on.set(false);
+            double_click.set(n_press == 2);
+        }
     ));
     list.add_controller(click);
     // Closing with the window button or Escape: same as "Cancel".
