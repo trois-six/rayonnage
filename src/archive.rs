@@ -852,10 +852,13 @@ pub fn write_book(
     compression: u8,
 ) -> Result<()> {
     let xml = info.map(comicinfo::to_xml);
+    // Page names may come from another archive: they never leave the book.
+    let names: Vec<String> = pages.iter().map(|p| safe_entry_name(&p.name)).collect();
+    let named = || pages.iter().zip(&names).map(|(p, name)| (name.as_str(), p.data.as_slice()));
     match format {
         OutputFormat::Cbz => {
-            let tmp = temp_sibling(dest);
-            let mut zw = zip::ZipWriter::new(File::create(&tmp)?);
+            let tmp = TempSibling::new(dest);
+            let mut zw = zip::ZipWriter::new(File::create(tmp.path())?);
             let method = if compression == 0 {
                 zip::CompressionMethod::Stored
             } else {
@@ -870,32 +873,29 @@ pub fn write_book(
                 .compression_method(method)
                 .compression_level(level)
                 .large_file(false);
-            for p in pages {
-                zw.start_file(p.name.as_str(), opts)?;
-                zw.write_all(&p.data)?;
+            for (name, data) in named() {
+                zw.start_file(name, opts)?;
+                zw.write_all(data)?;
             }
             if let Some(xml) = &xml {
                 zw.start_file("ComicInfo.xml", opts)?;
                 zw.write_all(xml.as_bytes())?;
             }
             zw.finish()?;
-            std::fs::rename(&tmp, dest)?;
+            tmp.persist()?;
         }
         OutputFormat::Cb7 => {
-            let tmp = temp_sibling(dest);
-            let mut w = sevenz_rust2::ArchiveWriter::create(&tmp).map_err(|e| anyhow!("{e}"))?;
+            let tmp = TempSibling::new(dest);
+            let mut w = sevenz_rust2::ArchiveWriter::create(tmp.path()).map_err(|e| anyhow!("{e}"))?;
             let method: sevenz_rust2::EncoderConfiguration = match compression {
                 0 => sevenz_rust2::EncoderMethod::COPY.into(),
                 1 => sevenz_rust2::encoder_options::Lzma2Options::from_level(5).into(),
                 _ => sevenz_rust2::encoder_options::Lzma2Options::from_level(9).into(),
             };
             w.set_content_methods(vec![method]);
-            for p in pages {
-                w.push_archive_entry(
-                    sevenz_rust2::ArchiveEntry::new_file(&p.name),
-                    Some(Cursor::new(&p.data)),
-                )
-                .map_err(|e| anyhow!("{e}"))?;
+            for (name, data) in named() {
+                w.push_archive_entry(sevenz_rust2::ArchiveEntry::new_file(name), Some(Cursor::new(data)))
+                    .map_err(|e| anyhow!("{e}"))?;
             }
             if let Some(xml) = &xml {
                 w.push_archive_entry(
@@ -905,11 +905,11 @@ pub fn write_book(
                 .map_err(|e| anyhow!("{e}"))?;
             }
             w.finish()?;
-            std::fs::rename(&tmp, dest)?;
+            tmp.persist()?;
         }
         OutputFormat::Cbt => {
-            let tmp = temp_sibling(dest);
-            let mut b = tar::Builder::new(File::create(&tmp)?);
+            let tmp = TempSibling::new(dest);
+            let mut b = tar::Builder::new(File::create(tmp.path())?);
             let mut add = |name: &str, data: &[u8]| -> Result<()> {
                 let mut h = tar::Header::new_gnu();
                 h.set_size(data.len() as u64);
@@ -919,14 +919,14 @@ pub fn write_book(
                 b.append_data(&mut h, name, data)?;
                 Ok(())
             };
-            for p in pages {
-                add(&p.name, &p.data)?;
+            for (name, data) in named() {
+                add(name, data)?;
             }
             if let Some(xml) = &xml {
                 add("ComicInfo.xml", xml.as_bytes())?;
             }
             b.into_inner()?.flush()?;
-            std::fs::rename(&tmp, dest)?;
+            tmp.persist()?;
         }
         OutputFormat::Cbr => {
             let rar = rar_program().ok_or_else(|| {
@@ -934,13 +934,13 @@ pub fn write_book(
             })?;
             let dir = tempfile::tempdir()?;
             let mut list = String::new();
-            for p in pages {
-                let file = dir.path().join(&p.name);
+            for (name, data) in named() {
+                let file = dir.path().join(name);
                 if let Some(parent) = file.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(&file, &p.data)?;
-                list.push_str(&p.name);
+                std::fs::write(&file, data)?;
+                list.push_str(name);
                 list.push('\n');
             }
             if let Some(xml) = &xml {
@@ -949,8 +949,8 @@ pub fn write_book(
             }
             let list_file = dir.path().join("__files.lst");
             std::fs::write(&list_file, list)?;
-            let tmp = temp_sibling(dest).with_extension("rar");
-            let dest_abs = std::path::absolute(&tmp)?;
+            let tmp = TempSibling::with_path(temp_sibling(dest).with_extension("rar"), dest);
+            let dest_abs = std::path::absolute(tmp.path())?;
             let level = match compression {
                 0 => "-m0",
                 1 => "-m3",
@@ -958,28 +958,27 @@ pub fn write_book(
             };
             let out = Command::new(rar)
                 .current_dir(dir.path())
-                .args(["a", "-idq", "-y", "-ep2", level, "-sc", "utf-8l"])
+                .args(["a", "-idq", "-y", level, "-sc", "utf-8l"])
                 .arg(&dest_abs)
                 .arg(format!("@{}", list_file.file_name().unwrap().to_string_lossy()))
                 .output()?;
             if !out.status.success() {
-                let _ = std::fs::remove_file(&tmp);
                 bail!(t!(
                     "rar failed: {0}",
                     format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr))
                 ));
             }
-            std::fs::rename(&tmp, dest)?;
+            tmp.persist()?;
         }
         OutputFormat::Pdf => write_pdf(dest, pages)?,
         OutputFormat::ImageFolder => {
             std::fs::create_dir_all(dest)?;
-            for p in pages {
-                let file = dest.join(&p.name);
+            for (name, data) in named() {
+                let file = dest.join(name);
                 if let Some(parent) = file.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                std::fs::write(file, &p.data)?;
+                std::fs::write(file, data)?;
             }
             if let Some(xml) = &xml {
                 std::fs::write(dest.join("ComicInfo.xml"), xml)?;
@@ -989,7 +988,54 @@ pub fn write_book(
     Ok(())
 }
 
-fn temp_sibling(dest: &Path) -> PathBuf {
+/// A page name to write into a book: relative, without `..`, `.` or a
+/// drive, whatever the separator.
+fn safe_entry_name(name: &str) -> String {
+    let parts: Vec<&str> = name
+        .split(['/', '\\'])
+        .filter(|c| !c.is_empty() && *c != "." && *c != ".." && !c.ends_with(':'))
+        .collect();
+    if parts.is_empty() { "page".to_string() } else { parts.join("/") }
+}
+
+/// A temporary file next to a destination, written first and then renamed
+/// onto it; deleted when dropped before that.
+struct TempSibling {
+    path: PathBuf,
+    dest: PathBuf,
+    persisted: bool,
+}
+
+impl TempSibling {
+    fn new(dest: &Path) -> Self {
+        Self::with_path(temp_sibling(dest), dest)
+    }
+
+    fn with_path(path: PathBuf, dest: &Path) -> Self {
+        TempSibling { path, dest: dest.to_path_buf(), persisted: false }
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Renames the file onto the destination, replacing it.
+    fn persist(mut self) -> std::io::Result<()> {
+        std::fs::rename(&self.path, &self.dest)?;
+        self.persisted = true;
+        Ok(())
+    }
+}
+
+impl Drop for TempSibling {
+    fn drop(&mut self) {
+        if !self.persisted {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+pub(crate) fn temp_sibling(dest: &Path) -> PathBuf {
     let name = dest
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -1047,9 +1093,9 @@ fn write_pdf(dest: &Path, pages: &[Page]) -> Result<()> {
     );
     let catalog_id = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
     doc.trailer.set("Root", catalog_id);
-    let tmp = temp_sibling(dest);
-    doc.save(&tmp)?;
-    std::fs::rename(&tmp, dest)?;
+    let tmp = TempSibling::new(dest);
+    doc.save(tmp.path())?;
+    tmp.persist()?;
     Ok(())
 }
 
@@ -1290,16 +1336,33 @@ fn read_all_entries(path: &Path, fmt: BookFormat) -> Result<Vec<Page>> {
 }
 
 /// Replaces `dest` by `tmp` (both are in the same folder, so this is a rename).
+/// `rename` replaces an existing file, on Windows too: deleting it first
+/// would only leave a moment where the book is gone.
 fn replace_file(tmp: &Path, dest: &Path) -> Result<()> {
-    if cfg!(windows) && dest.exists() {
-        std::fs::remove_file(dest)?;
-    }
     std::fs::rename(tmp, dest).with_context(|| t!("Replacing {0}", dest.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_names_never_leave_the_book() {
+        assert_eq!(safe_entry_name("../../etc/x.jpg"), "etc/x.jpg");
+        assert_eq!(safe_entry_name("/abs/./p1.png"), "abs/p1.png");
+        assert_eq!(safe_entry_name("C:\\dir\\..\\p.jpg"), "dir/p.jpg");
+        assert_eq!(safe_entry_name(".."), "page");
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("book");
+        let pages = vec![Page { name: "../outside.png".into(), data: png() }];
+        write_book(&folder, OutputFormat::ImageFolder, &pages, None, 1).unwrap();
+        assert!(folder.join("outside.png").exists());
+        assert!(!dir.path().join("outside.png").exists());
+        // No temporary file is left next to the books.
+        write_book(&dir.path().join("b.cbz"), OutputFormat::Cbz, &pages, None, 1).unwrap();
+        let names: Vec<String> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+    }
 
     fn png() -> Vec<u8> {
         let img = image::RgbImage::from_pixel(4, 6, image::Rgb([200, 10, 10]));

@@ -30,7 +30,7 @@ Settings → Library holds:
 |---|---|
 | Folders scanned for books | The list of folders the scan walks, recursively. "Add Folder…" adds one, the cross removes one, and a warning sign marks a folder not found. Changing the list offers to scan at once. |
 | Scan the folders at startup | Runs a scan each time the application starts. |
-| Remove books whose file has disappeared | During a scan, drops from the library the books whose file no longer exists, and was not found renamed or moved (§3). Off, they stay in the library. A library folder not found, or where the scan finds no book file at all, loses none of its books. |
+| Remove books whose file has disappeared | During a scan, drops from the library the books whose file no longer exists, and was not found renamed or moved (§3). Off, they stay in the library. A library folder not found, or where the scan finds no book file at all, loses none of its books; nor does a book whose file cannot be checked (network drive not answering, no permission), or whose file another operation is moving or rewriting. |
 | Parallel reads during the scan | Number of folders listed and books read at the same time, 16 by default. 16 to 32 suit network drives; 4 is enough for a local disk. |
 
 ## 3. Scanning

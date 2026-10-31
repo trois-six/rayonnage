@@ -103,12 +103,13 @@ pub fn undo(state: &State) {
         move || {
             let library = shadow(&st.library.borrow().books);
             let settings = st.settings.borrow().organizer.clone();
+            let folders = st.settings.borrow().library_folders.clone();
             run_job(
                 &st,
                 JobKind::Organize,
                 Vec::new(),
                 t!("Undoing the organization…"),
-                move |ctx| organizer::undo(&library, &settings, &JobInteraction { ctx }, &path),
+                move |ctx| organizer::undo(&library, &folders, &settings, &JobInteraction { ctx }, &path),
                 |st, r| apply_result(st, r, t!("Organization undo")),
             );
         },
@@ -137,6 +138,7 @@ fn launch(state: &State, books: Vec<Book>, profiles: Vec<Profile>) {
     let books = shadow(&books);
     let library = shadow(&state.library.borrow().books);
     let undo_path = Settings::undo_path();
+    let folders = state.settings.borrow().library_folders.clone();
     let ids = books.iter().map(|b| b.id).collect();
     run_job(
         state,
@@ -147,6 +149,7 @@ fn launch(state: &State, books: Vec<Book>, profiles: Vec<Profile>) {
             organizer::run(
                 &books,
                 &library,
+                &folders,
                 &profiles,
                 &JobInteraction { ctx },
                 &undo_path,

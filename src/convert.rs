@@ -469,6 +469,18 @@ fn process_pages(book: &Book, s: &ExportSettings, out: &mut Vec<OutPage>) -> Res
 }
 
 /// Exports one book (or several, combined into the first one's name).
+/// Whether `dir` holds only images and ComicInfo.xml (no folder): a book,
+/// which an export may replace.
+fn is_image_folder(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().all(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            e.file_type().is_ok_and(|t| t.is_file())
+                && (archive::is_image_name(&name) || name.eq_ignore_ascii_case("ComicInfo.xml"))
+        })
+    })
+}
+
 pub fn export(books: &[Book], s: &ExportSettings, index: usize) -> Result<ExportResult> {
     let first = books.first().ok_or_else(|| anyhow!(t!("No book")))?;
     let fmt = s.format.unwrap_or_else(|| {
@@ -544,20 +556,15 @@ pub fn export(books: &[Book], s: &ExportSettings, index: usize) -> Result<Export
     }
     let raw: Vec<Page> = pages.into_iter().map(|p| p.page).collect();
     let embedded = s.embed_comic_info.then_some(&info);
-    if same_file {
-        // Rewriting the source itself: write next to it, then replace it.
-        let tmp = dest.with_extension(format!("{}.new", fmt.extension()));
-        archive::write_book(&tmp, fmt, &raw, embedded, s.compression)?;
-        if cfg!(windows) {
-            std::fs::remove_file(&dest)?;
+    // The pages are in memory: rewriting the source itself is safe, a book
+    // file being written next to it and then renamed onto it.
+    if !same_file && dest.exists() && fmt == OutputFormat::ImageFolder {
+        if !is_image_folder(&dest) {
+            bail!(t!("{0} is not a folder of images: it is not replaced", dest.display()));
         }
-        std::fs::rename(&tmp, &dest)?;
-    } else {
-        if dest.exists() && fmt == OutputFormat::ImageFolder {
-            std::fs::remove_dir_all(&dest)?;
-        }
-        archive::write_book(&dest, fmt, &raw, embedded, s.compression)?;
+        std::fs::remove_dir_all(&dest)?;
     }
+    archive::write_book(&dest, fmt, &raw, embedded, s.compression)?;
     dest = std::path::absolute(&dest).unwrap_or(dest);
 
     let replace = s.target == Target::ReplaceSource && fmt != OutputFormat::ImageFolder;

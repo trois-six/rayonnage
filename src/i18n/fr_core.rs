@@ -136,4 +136,28 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("EPUB Document", "Document EPUB"),
     ("Invalid EPUB: no package document", "EPUB invalide : pas de document de paquetage"),
     ("{0} (of {1})", "{0} (Sur {1})"),
+    (
+        "{0} is not a folder of images: it is not replaced",
+        "{0} n'est pas un dossier d'images : il n'est pas remplacé",
+    ),
+    (
+        "The library could not be read: {0}. Nothing will be saved, so that the existing library is kept.",
+        "La bibliothèque n'a pas pu être lue : {0}. Rien ne sera enregistré, pour conserver la bibliothèque existante.",
+    ),
+    (
+        "{0} book(s) of the library could not be read and are left out:\n{1}",
+        "{0} livre(s) de la bibliothèque n'ont pas pu être lus et sont ignorés :\n{1}",
+    ),
+    (
+        "The library could not be read ({0}): it is not saved, to keep the existing library.",
+        "La bibliothèque n'a pas pu être lue ({0}) : elle n'est pas enregistrée, pour conserver la bibliothèque existante.",
+    ),
+    (
+        "The settings could not be read ({0}): the default settings are used.",
+        "Les paramètres n'ont pas pu être lus ({0}) : les paramètres par défaut sont utilisés.",
+    ),
+    (
+        "The settings could not be read ({0}). The file was kept as {1}; the default settings are used.",
+        "Les paramètres n'ont pas pu être lus ({0}). Le fichier a été conservé sous {1} ; les paramètres par défaut sont utilisés.",
+    ),
 ];

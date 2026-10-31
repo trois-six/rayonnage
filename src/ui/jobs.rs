@@ -74,6 +74,17 @@ impl AppState {
         self.jobs.borrow().iter().any(|j| j.kind == kind)
     }
 
+    /// The books whose files an operation, running or waiting, moves,
+    /// rewrites or deletes.
+    pub fn books_changing_files(&self) -> HashSet<u64> {
+        self.jobs
+            .borrow()
+            .iter()
+            .filter(|j| j.kind.changes_files())
+            .flat_map(|j| j.books.iter().copied())
+            .collect()
+    }
+
     /// Cancels every operation (when quitting).
     pub fn cancel_jobs(&self) {
         let waiting: Vec<Rc<Job>> = self.jobs.borrow().iter().filter(|j| !j.started()).cloned().collect();

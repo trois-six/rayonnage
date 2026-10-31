@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::bedetheque::ScraperSettings;
 use crate::convert::ExportSettings;
@@ -43,7 +44,9 @@ pub struct Settings {
     pub djvused_path: String,
     pub pdftoppm_path: String,
     /// Column order, visibility and width of the book list.
+    #[serde(deserialize_with = "skip_unreadable")]
     pub columns: Vec<ColumnSetting>,
+    #[serde(deserialize_with = "none_if_unreadable")]
     pub sort_field: Option<Field>,
     pub sort_descending: bool,
     pub show_info_panel: bool,
@@ -60,6 +63,17 @@ pub struct Settings {
     pub organizer: OrganizerSettings,
     /// User list of custom value names (Custom tab).
     pub custom_fields: Vec<String>,
+}
+
+/// A list whose entries this version cannot read (a column added by a newer
+/// version) loses them instead of making the whole file unreadable.
+fn skip_unreadable<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Vec<T>, D::Error> {
+    let values = Vec::<serde_json::Value>::deserialize(d)?;
+    Ok(values.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
+}
+
+fn none_if_unreadable<'de, D: Deserializer<'de>, T: DeserializeOwned>(d: D) -> Result<Option<T>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(d)?).ok())
 }
 
 /// Columns visible by default (close to ComicRack CE's default layout).
@@ -148,11 +162,24 @@ impl Settings {
         project_dirs().config_dir().join("settings.json")
     }
 
-    pub fn load() -> Settings {
-        let mut s: Settings = std::fs::read(Self::path())
-            .ok()
-            .and_then(|d| serde_json::from_slice(&d).ok())
-            .unwrap_or_default();
+    /// The settings, with a message for the user when the file could not
+    /// be read: it is then kept aside, as it would be replaced at the next
+    /// save.
+    pub fn load() -> (Settings, Option<String>) {
+        let path = Self::path();
+        let (mut s, problem) = match std::fs::read(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Settings::default(), None),
+            Err(e) => (Settings::default(), Some(t!("The settings could not be read ({0}): the default settings are used.", e))),
+            Ok(data) => match serde_json::from_slice(&data) {
+                Ok(s) => (s, None),
+                Err(e) => {
+                    let kept = path.with_extension("json.unreadable");
+                    let _ = std::fs::copy(&path, &kept);
+                    let m = t!("The settings could not be read ({0}). The file was kept as {1}; the default settings are used.", e, kept.display());
+                    (Settings::default(), Some(m))
+                }
+            },
+        };
         // Columns added in newer versions are appended (hidden).
         for f in Field::ALL {
             if !s.columns.iter().any(|c| c.field == *f) {
@@ -160,7 +187,7 @@ impl Settings {
             }
         }
         s.apply_tools();
-        s
+        (s, problem)
     }
 
     /// Only the language, read before the interface is built.
@@ -192,5 +219,19 @@ impl Settings {
 
     pub fn undo_path() -> PathBuf {
         crate::library::data_dir().join("organizer-undo.json")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn columns_unknown_to_this_version_are_skipped() {
+        let json = r#"{"library_folders": ["/b"], "columns": [{"field": "Series", "visible": true, "width": 9}, {"field": "FromTheFuture"}], "sort_field": "FromTheFuture"}"#;
+        let s: Settings = serde_json::from_str(json).unwrap();
+        assert_eq!(s.library_folders, [PathBuf::from("/b")]);
+        assert_eq!(s.columns.len(), 1);
+        assert_eq!(s.sort_field, None);
     }
 }

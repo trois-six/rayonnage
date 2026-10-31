@@ -79,6 +79,11 @@ pub struct Library {
     removed: HashSet<u64>,
     db: Option<rusqlite::Connection>,
     db_path: PathBuf,
+    /// Why the library could not be loaded: it is then never saved, which
+    /// would replace the books in the database.
+    load_error: Option<String>,
+    /// The books of the database that could not be read.
+    unreadable: Vec<String>,
 }
 
 /// Format of the former JSON library file, imported once.
@@ -119,11 +124,11 @@ impl Library {
         match Self::open_db(db_path) {
             Ok(db) => {
                 if let Err(e) = lib.read_db(&db) {
-                    eprintln!("{e:#}");
+                    lib.load_error = Some(format!("{}: {e:#}", db_path.display()));
                 }
                 lib.db = Some(db);
             }
-            Err(e) => eprintln!("{}: {e:#}", db_path.display()),
+            Err(e) => lib.load_error = Some(format!("{}: {e:#}", db_path.display())),
         }
         // First start with the database: import the former JSON file.
         if lib.books.is_empty()
@@ -150,6 +155,9 @@ impl Library {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(1);
+        // Never below the ids in use, even if a book cannot be read.
+        let max_id: i64 = db.query_row("SELECT COALESCE(MAX(id), 0) FROM books", [], |r| r.get(0))?;
+        self.next_id = self.next_id.max(max_id as u64 + 1);
         let mut stmt = db.prepare("SELECT id, data FROM books ORDER BY id")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))?;
         for row in rows {
@@ -159,7 +167,7 @@ impl Library {
                     b.id = id as u64;
                     self.books.push(b);
                 }
-                Err(e) => eprintln!("book {id}: {e}"),
+                Err(e) => self.unreadable.push(format!("{id}: {e}")),
             }
         }
         self.reindex();
@@ -170,10 +178,23 @@ impl Library {
         self.index = self.books.iter().enumerate().map(|(i, b)| (b.id, i)).collect();
     }
 
+    /// What went wrong when loading the library, to tell the user.
+    pub fn load_problem(&self) -> Option<String> {
+        if let Some(e) = &self.load_error {
+            return Some(t!("The library could not be read: {0}. Nothing will be saved, so that the existing library is kept.", e));
+        }
+        (!self.unreadable.is_empty()).then(|| {
+            t!("{0} book(s) of the library could not be read and are left out:\n{1}", self.unreadable.len(), self.unreadable.join("\n"))
+        })
+    }
+
     /// Writes the books added, changed or removed since the last save.
     pub fn save(&mut self) -> Result<()> {
         if self.dirty.is_empty() && self.removed.is_empty() {
             return Ok(());
+        }
+        if let Some(e) = &self.load_error {
+            anyhow::bail!(t!("The library could not be read ({0}): it is not saved, to keep the existing library.", e));
         }
         if self.db.is_none() {
             self.db = Some(Self::open_db(&self.db_path)?);
@@ -737,14 +758,20 @@ fn gone_books<'a>(
     for b in known.iter().filter(|b| !found.contains(b.file_path.as_path())) {
         let Some(dir) = b.file_path.parent() else { continue };
         if folders.iter().any(|f| b.file_path.starts_with(f)) {
-            if available.iter().any(|f| b.file_path.starts_with(f)) && (walk.listed.contains_key(dir) || !dir.exists()) {
+            if available.iter().any(|f| b.file_path.starts_with(f)) && (walk.listed.contains_key(dir) || is_missing(dir)) {
                 gone.push(b);
             }
-        } else if !b.file_path.exists() {
+        } else if is_missing(&b.file_path) {
             if dir.is_dir() { gone.push(b) } else { lost.push(b) }
         }
     }
     (gone, lost)
+}
+
+/// Whether `path` is known not to exist. An error (permission, network
+/// drive not answering) is not taken for a missing file.
+pub fn is_missing(path: &Path) -> bool {
+    matches!(path.try_exists(), Ok(false))
 }
 
 /// Whether a book file found by the scan is the file of `book`, renamed or
@@ -835,6 +862,18 @@ pub fn thumbnail(book: &Book, max: u32) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_library_not_loaded_is_never_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("library.db");
+        std::fs::write(&db, b"not a database").unwrap();
+        let mut lib = Library::load_at(&db, &dir.path().join("none.json"));
+        assert!(lib.load_problem().is_some());
+        lib.add(Book { file_path: "/b/x.cbz".into(), ..Default::default() });
+        assert!(lib.save().is_err());
+        assert_eq!(std::fs::read(&db).unwrap(), b"not a database");
+    }
 
     #[test]
     fn database_import_save_and_reload() {

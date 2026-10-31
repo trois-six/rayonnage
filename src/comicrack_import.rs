@@ -523,8 +523,12 @@ pub fn map_path(path: &str, mappings: &[(String, String)]) -> String {
         if local.trim().is_empty() {
             continue;
         }
-        if path.len() >= win.len() && path[..win.len()].eq_ignore_ascii_case(win) {
-            let rest = path[win.len()..].replace('\\', "/");
+        // `get` and not slicing: `win.len()` may fall inside an accented letter.
+        if let (Some(head), Some(rest)) = (path.get(..win.len()), path.get(win.len()..))
+            && head.eq_ignore_ascii_case(win)
+        {
+            // Without a leading separator, `join` would take it as a full path.
+            let rest = rest.trim_start_matches(['\\', '/']).replace('\\', "/");
             let base = std::path::PathBuf::from(local.trim());
             return if rest.is_empty() { base } else { base.join(rest) }.to_string_lossy().into_owned();
         }
@@ -561,7 +565,16 @@ pub fn apply(cfg: &ComicRackConfig, choices: &ImportChoices, mappings: &[(String
             }
         }
         report.push(t!("File organization: {0} profile(s) imported", org.profiles.len()));
-        s.organizer = org;
+        // Added to the user's profiles, none of which is replaced.
+        for mut p in org.profiles {
+            let base = p.name.clone();
+            let mut i = 2;
+            while s.organizer.profiles.iter().any(|x| x.name == p.name) {
+                p.name = format!("{base} ({i})");
+                i += 1;
+            }
+            s.organizer.profiles.push(p);
+        }
     }
     if choices.preferences {
         if let Some(v) = cfg.scan_on_startup {
@@ -597,6 +610,13 @@ pub fn apply(cfg: &ComicRackConfig, choices: &ImportChoices, mappings: &[(String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_path_does_not_split_an_accented_letter() {
+        let m = [("D:\\é".to_string(), "/m".to_string())];
+        assert_eq!(map_path("D:\\aé\\x", &m), "D:\\aé\\x");
+        assert_eq!(map_path("D:\\é\\x", &m).replace('\\', "/"), "/m/x");
+    }
 
     const LO: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <Profiles LastUsed="BDs">

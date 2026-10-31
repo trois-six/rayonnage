@@ -103,8 +103,9 @@ fn install_icon() {
 
 pub fn build_ui(app: &gtk::Application) {
     install_icon();
-    let settings = Settings::load();
+    let (settings, settings_problem) = Settings::load();
     let library = Library::load();
+    let library_problem = library.load_problem();
 
     let window = gtk::ApplicationWindow::builder()
         .application(app)
@@ -254,6 +255,10 @@ pub fn build_ui(app: &gtk::Application) {
     // SAFETY: the key is only used here, with this type.
     unsafe { window.set_data("app-state", state.clone()) };
     window.present();
+    for problem in [settings_problem, library_problem].into_iter().flatten() {
+        state.journal.error(&problem);
+        widgets::alert(&state.window, t!("Error"), &problem);
+    }
 
     #[cfg(debug_assertions)]
     debug_screenshots(&state);
@@ -990,6 +995,25 @@ impl AppState {
         self.store_books(books, InfoChange::ToWriteLater);
     }
 
+    /// Removes the books whose file was found missing, given with the path
+    /// it had; returns how many were removed. A book that has another file
+    /// since, or whose file an operation is moving or rewriting, is kept.
+    fn remove_gone_books(self: &Rc<Self>, gone: Vec<(u64, PathBuf)>) -> usize {
+        let busy = self.books_changing_files();
+        let gone: Vec<(u64, PathBuf)> = {
+            let lib = self.library.borrow();
+            gone.into_iter()
+                .filter(|(id, path)| !busy.contains(id) && lib.get(*id).is_some_and(|b| &b.file_path == path))
+                .collect()
+        };
+        for (_, path) in &gone {
+            self.journal.info(&t!("Removed (file not found): {0}", path.display()));
+        }
+        let ids: Vec<u64> = gone.into_iter().map(|(id, _)| id).collect();
+        self.remove_books(&ids);
+        ids.len()
+    }
+
     pub fn add_books(self: &Rc<Self>, books: Vec<Book>) {
         let mut objs = Vec::new();
         {
@@ -1148,17 +1172,7 @@ fn scan_folders(state: &State) {
         |st, stats| {
             let nm = stats.missing.len();
             if st.settings.borrow().remove_missing && !stats.missing.is_empty() {
-                // Only the books still at the path found missing: another
-                // operation may have moved them during the scan.
-                let gone: Vec<&(u64, PathBuf)> = {
-                    let lib = st.library.borrow();
-                    stats.missing.iter().filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path)).collect()
-                };
-                for (_, path) in &gone {
-                    st.journal.info(&t!("Removed (file not found): {0}", path.display()));
-                }
-                let gone: Vec<u64> = gone.into_iter().map(|(id, _)| *id).collect();
-                st.remove_books(&gone);
+                st.remove_gone_books(stats.missing);
             }
             st.save_library();
             st.resort();
@@ -1292,7 +1306,7 @@ fn refresh(state: &State, force: bool) {
                     break;
                 }
                 ctx.progress(i, total, b.file_name());
-                if !b.file_path.exists()
+                if library::is_missing(&b.file_path)
                     && (b.file_path.parent().is_some_and(std::path::Path::is_dir)
                         || folders.iter().any(|f| b.file_path.starts_with(f) && f.is_dir()))
                 {
@@ -1316,15 +1330,6 @@ fn refresh(state: &State, force: bool) {
             for (b, _) in &ok {
                 st.journal.info(&t!("Reread: {0}", b.file_path.display()));
             }
-            // Unless another operation gave them another file meanwhile.
-            let gone: Vec<(u64, PathBuf)> = {
-                let lib = st.library.borrow();
-                gone.into_iter().filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path)).collect()
-            };
-            for (_, path) in &gone {
-                st.journal.info(&t!("Removed (file not found): {0}", path.display()));
-            }
-            let gone: Vec<u64> = gone.into_iter().map(|(id, _)| id).collect();
             for p in &skipped {
                 st.journal.info(&t!("Not reread (changes not written to the file): {0}", p));
             }
@@ -1345,15 +1350,15 @@ fn refresh(state: &State, force: bool) {
                 }
                 true
             });
-            if !gone.is_empty() {
-                st.remove_books(&gone);
+            let removed = st.remove_gone_books(gone);
+            if removed > 0 {
                 st.save_library();
                 refresh_sidebar(st);
                 update_status(st);
             }
             let mut msg = t!("{0} book(s) refreshed", n);
-            if !gone.is_empty() {
-                msg.push_str(&t!(" — {0} book(s) removed from the library: file not found", gone.len()));
+            if removed > 0 {
+                msg.push_str(&t!(" — {0} book(s) removed from the library: file not found", removed));
             }
             if !skipped.is_empty() {
                 msg.push_str(&t!(

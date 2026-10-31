@@ -596,6 +596,13 @@ impl Profile {
                     .into(),
             );
         }
+        // A relative folder (a Windows path imported from ComicRack, on
+        // Linux) would be created in the application's working folder.
+        for folder in [&self.base_folder, &self.failed_folder] {
+            if !folder.trim().is_empty() && !Path::new(folder.trim()).is_absolute() {
+                e.push(t!("The folder {0} is not a full path.", folder));
+            }
+        }
         e
     }
 }
@@ -913,22 +920,52 @@ fn same_path(a: &Path, b: &Path) -> bool {
     a.components().eq(b.components())
 }
 
+/// Copies a file or an image folder. The copy is made under a temporary
+/// name next to `dest`, then renamed: an interrupted copy never leaves a
+/// partial book at `dest`.
 fn copy_path(src: &Path, dest: &Path) -> io::Result<()> {
-    if src.is_dir() {
-        for e in walkdir::WalkDir::new(src) {
-            let e = e.map_err(io::Error::other)?;
-            let rel = e.path().strip_prefix(src).map_err(io::Error::other)?;
-            let target = dest.join(rel);
-            if e.file_type().is_dir() {
-                fs::create_dir_all(&target)?;
-            } else {
-                fs::copy(e.path(), &target)?;
-            }
-        }
-        Ok(())
-    } else {
-        fs::copy(src, dest).map(|_| ())
+    let tmp = crate::archive::temp_sibling(dest);
+    let r = copy_into(src, &tmp).and_then(|()| fs::rename(&tmp, dest));
+    if r.is_err() {
+        let _ = remove_path(&tmp);
     }
+    r
+}
+
+fn copy_into(src: &Path, dest: &Path) -> io::Result<()> {
+    if !src.is_dir() {
+        return copy_file_synced(src, dest);
+    }
+    for e in walkdir::WalkDir::new(src) {
+        let e = e.map_err(io::Error::other)?;
+        let rel = e.path().strip_prefix(src).map_err(io::Error::other)?;
+        let target = dest.join(rel);
+        if e.file_type().is_dir() {
+            fs::create_dir_all(&target)?;
+        } else {
+            copy_file_synced(e.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies a file and checks that the copy reached the disk complete: on a
+/// network drive, a failed write may only show when the file is flushed.
+/// The permissions and the modification date are kept.
+fn copy_file_synced(src: &Path, dest: &Path) -> io::Result<()> {
+    let mut from = fs::File::open(src)?;
+    let meta = from.metadata()?;
+    let mut to = fs::File::create(dest)?;
+    let written = io::copy(&mut from, &mut to)?;
+    to.sync_all()?;
+    if written != meta.len() {
+        return Err(io::Error::other(t!("incomplete copy: {0} of {1} bytes", written, meta.len())));
+    }
+    let _ = to.set_permissions(meta.permissions());
+    if let Ok(modified) = meta.modified() {
+        let _ = to.set_modified(modified);
+    }
+    Ok(())
 }
 
 fn remove_path(p: &Path) -> io::Result<()> {
@@ -939,15 +976,88 @@ fn remove_path(p: &Path) -> io::Result<()> {
     }
 }
 
-fn move_path(src: &Path, dest: &Path) -> io::Result<()> {
+/// What became of the source of a move.
+enum Moved {
+    Done,
+    /// Copied to another drive, but the source could not be deleted.
+    SourceKept(io::Error),
+}
+
+fn move_path(src: &Path, dest: &Path) -> io::Result<Moved> {
     match fs::rename(src, dest) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::CrossesDevices || e.raw_os_error() == Some(18) => {
+        Ok(()) => Ok(Moved::Done),
+        Err(e) if e.kind() == io::ErrorKind::CrossesDevices => {
             copy_path(src, dest)?;
-            remove_path(src)
+            Ok(match remove_path(src) {
+                Ok(()) => Moved::Done,
+                Err(e) => Moved::SourceKept(e),
+            })
         }
         Err(e) => Err(e),
     }
+}
+
+/// Whether `dest`, which exists, is in fact the file at `src`: the same file
+/// reached through a link, or `src` itself on a case-insensitive drive (SMB,
+/// FAT, Windows, macOS) when the two paths differ only by case.
+fn is_same_file(src: &Path, dest: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (fs::metadata(src), fs::metadata(dest))
+            && (a.dev(), a.ino()) == (b.dev(), b.ino())
+        {
+            return true;
+        }
+    }
+    #[cfg(not(unix))]
+    if let (Ok(a), Ok(b)) = (fs::canonicalize(src), fs::canonicalize(dest))
+        && a == b
+    {
+        return true;
+    }
+    // Some network file systems give each spelling its own inode: the
+    // folder is listed to see whether `dest` has its own entry.
+    let (Some(dir), Some(name)) = (dest.parent(), dest.file_name()) else { return false };
+    path_str(src).to_lowercase() == path_str(dest).to_lowercase()
+        && fs::read_dir(dir).is_ok_and(|entries| entries.flatten().all(|e| e.file_name() != name))
+}
+
+/// Changes only the case of a file name, through a temporary name: some
+/// case-insensitive drives ignore a direct rename to the same name.
+fn rename_case(src: &Path, dest: &Path) -> io::Result<()> {
+    let tmp = crate::archive::temp_sibling(dest);
+    fs::rename(src, &tmp)?;
+    fs::rename(&tmp, dest).inspect_err(|_| {
+        let _ = fs::rename(&tmp, src);
+    })
+}
+
+/// Writes the undo information, or deletes the file when there is none left.
+fn save_undo_entries(path: &Path, entries: &[UndoEntry]) -> io::Result<()> {
+    if entries.is_empty() {
+        return match fs::remove_file(path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        };
+    }
+    let json = serde_json::to_string_pretty(entries).map_err(io::Error::other)?;
+    crate::library::write_atomic(path, json.as_bytes()).map_err(io::Error::other)
+}
+
+/// A file to overwrite, moved aside while the file replacing it is written.
+struct PendingBackup {
+    path: PathBuf,
+    backup: PathBuf,
+    /// Its book in the library.
+    book: Option<u64>,
+}
+
+/// The name an existing file is moved to while the file replacing it is
+/// written, so that it can be put back if that fails.
+fn backup_sibling(dest: &Path) -> PathBuf {
+    let name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    dest.with_file_name(format!(".{name}.{}.old", std::process::id()))
 }
 
 /// Name of an ISO 639-1 language code in the interface language (the code
@@ -1431,6 +1541,15 @@ pub struct Organizer<'a> {
     dup_always: bool,
     dup_action: DuplicateAction,
     pending_last_page: Option<i32>,
+    /// Destinations written by this run, never overwritten by it.
+    placed: HashSet<PathBuf>,
+    /// The existing file to overwrite, moved aside until the transfer
+    /// succeeds.
+    pending_backup: Option<PendingBackup>,
+    /// The library folders, never deleted when they become empty.
+    library_folders: Vec<PathBuf>,
+    /// Where the undo information is saved after each move.
+    undo_path: Option<PathBuf>,
 }
 
 impl<'a> Organizer<'a> {
@@ -1456,7 +1575,17 @@ impl<'a> Organizer<'a> {
             dup_always: false,
             dup_action: DuplicateAction::Rename,
             pending_last_page: None,
+            placed: HashSet::new(),
+            pending_backup: None,
+            library_folders: Vec::new(),
+            undo_path: None,
         }
+    }
+
+    /// Folders never deleted when they become empty.
+    pub fn with_library_folders(mut self, folders: &[PathBuf]) -> Self {
+        self.library_folders = folders.to_vec();
+        self
     }
 
     // ----- computed series values -------------------------------------------
@@ -2242,35 +2371,34 @@ impl<'a> Organizer<'a> {
             self.log(act::SKIPPED, &name, tr(msg::ALREADY_THERE));
             return true;
         }
-        let case_insensitive_fs = cfg!(any(windows, target_os = "macos"));
-        if case_insensitive_fs && path_str(dest).to_lowercase() == name.to_lowercase() {
+        if !dest.exists() || !is_same_file(&book.file_path, dest) {
+            return false;
+        }
+        // The destination is the book file itself: a link to it, or a
+        // case-only difference on a case-insensitive drive.
+        if path_str(dest).to_lowercase() == name.to_lowercase() {
             if p.mode == Mode::Simulate {
-                self.log(
-                    act::RENAMING_SIM,
-                    &name,
-                    t!("to: {0}", path_str(dest)),
-                );
+                self.log(act::RENAMING_SIM, &name, t!("to: {0}", path_str(dest)));
             } else {
-                match fs::rename(&book.file_path, dest) {
+                match rename_case(&book.file_path, dest) {
                     Ok(()) => {
                         self.current_paths.insert(idx, dest.to_path_buf());
                         if p.mode == Mode::Move {
+                            self.push_undo(&p.name, &book.file_path, dest);
                             self.record_move(book.id, dest);
                         }
                         self.log(act::RENAMED, &name, t!("to: {0}", path_str(dest)));
                     }
-                    Err(e) => {
-                        self.log(act::FAILED, &name, t!("An error occurred: {0}", e))
-                    }
+                    Err(e) => self.log(act::FAILED, &name, t!("An error occurred: {0}", e)),
                 }
             }
-            self.log(act::SKIPPED, &name, tr(msg::ALREADY_THERE));
-            return true;
         }
-        false
+        self.log(act::SKIPPED, &name, tr(msg::ALREADY_THERE));
+        true
     }
 
     pub fn run(&mut self, books: &[Book], profiles: &[Profile], undo_path: &Path) -> RunResult {
+        self.undo_path = Some(undo_path.to_path_buf());
         let mut reports: Vec<ProfileReport> = profiles
             .iter()
             .map(|p| ProfileReport {
@@ -2375,20 +2503,15 @@ impl<'a> Organizer<'a> {
             }
         }
 
-        if !self.undo.is_empty() {
-            if let Some(d) = undo_path.parent() {
-                let _ = fs::create_dir_all(d);
-            }
-            if let Ok(json) = serde_json::to_string_pretty(&self.undo)
-                && let Err(e) = fs::write(undo_path, json)
-            {
-                self.profile_name.clear();
-                self.log(
-                    act::FAILED,
-                    path_str(undo_path),
-                    t!("Could not save the undo information: {0}", e),
-                );
-            }
+        if !self.undo.is_empty()
+            && let Err(e) = self.save_undo()
+        {
+            self.profile_name.clear();
+            self.log(
+                act::FAILED,
+                path_str(undo_path),
+                t!("Could not save the undo information: {0}", e),
+            );
         }
 
         self.result.summary = reports
@@ -2443,21 +2566,16 @@ impl<'a> Organizer<'a> {
         if let Some(folder) = dest.parent()
             && !self.create_folder(folder, p, &src)
         {
+            self.settle_backup(false);
             return Outcome::Failed;
         }
         self.finish_op(book, op, p, &src, &dest)
     }
 
     fn finish_op(&mut self, book: &Book, op: &Op, p: &Profile, src: &Path, dest: &Path) -> Outcome {
-        let old_folder = src.parent().map(Path::to_path_buf);
         let ok = self.transfer(book, op.idx, p, src, dest);
-        if p.remove_empty_folders && p.mode == Mode::Move {
-            if let Some(f) = old_folder {
-                self.remove_empty_folders(&f, p);
-            }
-            if let Some(f) = dest.parent() {
-                self.remove_empty_folders(f, p);
-            }
+        if p.mode == Mode::Move {
+            self.clean_folders(src, dest, ok, p);
         }
         if !ok {
             return Outcome::Failed;
@@ -2487,12 +2605,18 @@ impl<'a> Organizer<'a> {
                 self.moved_books.insert(dest.to_path_buf());
                 Ok(())
             }
-            Mode::Move => move_path(src, dest).map(|()| {
+            Mode::Move => move_path(src, dest).map(|moved| {
+                if let Moved::SourceKept(e) = moved {
+                    let m = t!("Copied to {0}, but the original could not be deleted: {1}", path_str(dest), e);
+                    self.log(act::FAILED, path_str(src), m);
+                }
+                self.placed.insert(dest.to_path_buf());
                 self.push_undo(&p.name, src, dest);
                 self.current_paths.insert(idx, dest.to_path_buf());
                 self.record_move(book.id, dest);
             }),
             Mode::Copy => copy_path(src, dest).map(|()| {
+                self.placed.insert(dest.to_path_buf());
                 if p.copy_add_to_library {
                     let mut nb = Book {
                         id: 0,
@@ -2509,6 +2633,7 @@ impl<'a> Organizer<'a> {
                 }
             }),
         };
+        self.settle_backup(r.is_ok());
         match r {
             Ok(()) => true,
             Err(e) => {
@@ -2519,6 +2644,23 @@ impl<'a> Organizer<'a> {
                 );
                 false
             }
+        }
+    }
+
+    /// Deletes the file overwritten once the new one is there, or puts it
+    /// back when the transfer failed.
+    fn settle_backup(&mut self, transferred: bool) {
+        let Some(b) = self.pending_backup.take() else { return };
+        if !transferred {
+            let _ = fs::rename(&b.backup, &b.path);
+            return;
+        }
+        match remove_path(&b.backup) {
+            Ok(()) => self.log(act::DELETED, path_str(&b.path), ""),
+            Err(e) => self.log(act::FAILED, path_str(&b.backup), t!("An error occurred: {0}", e)),
+        }
+        if let Some(id) = b.book {
+            self.result.removed.push(id);
         }
     }
 
@@ -2533,6 +2675,13 @@ impl<'a> Organizer<'a> {
                 original: from.to_path_buf(),
             });
         }
+        // Saved after each move: an interrupted run can still be undone.
+        let _ = self.save_undo();
+    }
+
+    fn save_undo(&self) -> io::Result<()> {
+        let Some(path) = &self.undo_path else { return Ok(()) };
+        save_undo_entries(path, &self.undo)
     }
 
     fn create_folder(&mut self, folder: &Path, p: &Profile, src: &Path) -> bool {
@@ -2545,8 +2694,14 @@ impl<'a> Organizer<'a> {
             }
             return true;
         }
+        // The folders created are remembered, to delete them if the transfer
+        // fails.
+        let missing: Vec<PathBuf> = folder.ancestors().take_while(|d| !d.exists()).map(Path::to_path_buf).collect();
         match fs::create_dir_all(folder) {
-            Ok(()) => true,
+            Ok(()) => {
+                self.created_paths.extend(missing);
+                true
+            }
             Err(e) => {
                 let m = t!("Book {0} was not processed.\nError: {1}", path_str(src), e);
                 self.log(act::FOLDER_FAILED, path_str(folder), m);
@@ -2555,8 +2710,35 @@ impl<'a> Organizer<'a> {
         }
     }
 
+    /// After a move from `src` to `dest`: once moved, the folders left empty
+    /// at the source are deleted when the profile asks for it; when the move
+    /// failed, the folders this run created for it are.
+    fn clean_folders(&mut self, src: &Path, dest: &Path, moved: bool, p: &Profile) {
+        if moved {
+            if p.remove_empty_folders
+                && let Some(dir) = src.parent()
+            {
+                self.remove_empty_folders(dir, p);
+            }
+        } else if let Some(dir) = dest.parent() {
+            self.remove_created_folders(dir);
+        }
+    }
+
+    /// Deletes `dir` and its parents while this run created them and they
+    /// are empty.
+    fn remove_created_folders(&mut self, dir: &Path) {
+        let mut d = dir;
+        while self.created_paths.contains(d) && fs::remove_dir(d).is_ok() {
+            self.created_paths.remove(d);
+            let Some(parent) = d.parent() else { return };
+            d = parent;
+        }
+    }
+
     /// Deletes `dir` and its parents while they are empty. Stops at excluded
-    /// folders, the profile's base/failed folders and the home folder.
+    /// folders, the profile's base/failed folders, the library folders and
+    /// the home folder.
     fn remove_empty_folders(&self, dir: &Path, p: &Profile) {
         let home = directories::UserDirs::new().map(|u| u.home_dir().to_path_buf());
         let mut d = dir.to_path_buf();
@@ -2570,6 +2752,7 @@ impl<'a> Organizer<'a> {
                 .chain([&p.base_folder, &p.failed_folder])
                 .filter(|s| !s.trim().is_empty())
                 .any(|s| same_path(Path::new(s), &d))
+                || self.library_folders.iter().any(|f| same_path(f, &d))
                 || home.as_deref().is_some_and(|h| same_path(h, &d));
             if protected {
                 return;
@@ -2620,16 +2803,25 @@ impl<'a> Organizer<'a> {
             if !dest.exists() && !self.moved_books.contains(dest.as_path()) {
                 return Resolved::Proceed;
             }
-            let old = self.find_library_book(dest);
-            if !self.dup_always {
-                let size = fs::metadata(&*dest).ok().map(|m| m.len());
-                let (action, all) = self.interaction.on_duplicate(book, dest, size);
-                self.dup_action = action;
-                if all {
-                    self.dup_always = true;
-                }
+            if dest.exists() && is_same_file(&book.file_path, dest) {
+                self.log(act::SKIPPED, &name, tr(msg::ALREADY_THERE));
+                return Resolved::Skipped;
             }
-            match self.dup_action {
+            let old = self.find_library_book(dest);
+            // A file this run has just put there is never overwritten (and
+            // the answer chosen for the other duplicates stays).
+            let action = if self.placed.contains(dest.as_path()) {
+                DuplicateAction::Rename
+            } else {
+                if !self.dup_always {
+                    let size = fs::metadata(&*dest).ok().map(|m| m.len());
+                    let (action, all) = self.interaction.on_duplicate(book, dest, size);
+                    self.dup_action = action;
+                    self.dup_always = all;
+                }
+                self.dup_action
+            };
+            match action {
                 DuplicateAction::Skip => {
                     let m = t!(
                         "A file already exists at: {0} and the user declined to overwrite it",
@@ -2662,15 +2854,14 @@ impl<'a> Organizer<'a> {
                             self.result.read_progress.push((book.id, lp));
                         }
                     }
-                    if let Err(e) = remove_path(dest) {
+                    // Moved aside, and deleted once the new file is there.
+                    let backup = backup_sibling(dest);
+                    if let Err(e) = fs::rename(&*dest, &backup) {
                         let m = t!("Failed to overwrite {0}. Error: {1}", path_str(dest), e);
                         self.log(act::FAILED, &name, m);
                         return Resolved::Failed;
                     }
-                    self.log(act::DELETED, path_str(dest), "");
-                    if let Some((id, _)) = old {
-                        self.result.removed.push(id);
-                    }
+                    self.pending_backup = Some(PendingBackup { path: dest.clone(), backup, book: old.map(|(id, _)| id) });
                 }
             }
         }
@@ -2695,40 +2886,59 @@ impl<'a> Organizer<'a> {
         let total = entries.len();
         let mut held = Vec::new();
         let mut cancelled = false;
+        // Entries put back; the others stay in the undo file.
+        let mut restored = HashSet::new();
         let tally = |r: Outcome, s: &mut usize, f: &mut usize, k: &mut usize| match r {
             Outcome::Success => *s += 1,
             Outcome::Failed => *f += 1,
             _ => *k += 1,
         };
         // Reverse order so that a book moved by several profiles ends back home.
-        for e in entries.into_iter().rev() {
+        for (i, e) in entries.iter().enumerate().rev() {
             if self.interaction.is_cancelled() {
                 cancelled = true;
                 let n = total - success - failed - skipped;
                 self.log(act::CANCELLED, t!("{0} files", n), tr(msg::CANCELLED));
                 break;
             }
-            let r = self.undo_one(settings, &e, false);
+            let r = self.undo_one(settings, e, false);
             if r == Outcome::Duplicate {
-                held.push(e);
+                held.push((i, e));
                 continue;
+            }
+            if r == Outcome::Success {
+                restored.insert(i);
             }
             tally(r, &mut success, &mut failed, &mut skipped);
             self.interaction.progress(success + failed + skipped, total);
         }
         if !cancelled {
-            for e in held {
+            for (i, e) in held {
                 if self.interaction.is_cancelled() {
                     let n = total - success - failed - skipped;
                     self.log(act::CANCELLED, t!("{0} files", n), tr(msg::CANCELLED));
                     break;
                 }
-                let r = self.undo_one(settings, &e, true);
+                let r = self.undo_one(settings, e, true);
+                if r == Outcome::Success {
+                    restored.insert(i);
+                }
                 tally(r, &mut success, &mut failed, &mut skipped);
                 self.interaction.progress(success + failed + skipped, total);
             }
         }
-        let _ = fs::remove_file(undo_path);
+        // What could not be put back (drive offline, cancelled...) can be
+        // undone later.
+        let remaining: Vec<UndoEntry> = entries
+            .into_iter()
+            .enumerate()
+            .filter(|(i, _)| !restored.contains(i))
+            .map(|(_, e)| e)
+            .collect();
+        if let Err(e) = save_undo_entries(undo_path, &remaining) {
+            self.profile_name.clear();
+            self.log(act::FAILED, path_str(undo_path), t!("Could not save the undo information: {0}", e));
+        }
         if cancelled {
             skipped = total - success - failed;
         }
@@ -2786,19 +2996,18 @@ impl<'a> Organizer<'a> {
         if let Some(folder) = dest.parent()
             && !self.create_folder(folder, &profile, &e.current)
         {
+            self.settle_backup(false);
             return Outcome::Failed;
         }
         let r = move_path(&e.current, &dest);
-        if profile.remove_empty_folders {
-            if let Some(f) = e.current.parent() {
-                self.remove_empty_folders(f, &profile);
-            }
-            if let Some(f) = dest.parent() {
-                self.remove_empty_folders(f, &profile);
-            }
-        }
+        self.settle_backup(r.is_ok());
+        self.clean_folders(&e.current, &dest, r.is_ok(), &profile);
         match r {
-            Ok(()) => {
+            Ok(moved) => {
+                if let Moved::SourceKept(err) = moved {
+                    let m = t!("Copied to {0}, but the original could not be deleted: {1}", path_str(&dest), err);
+                    self.log(act::FAILED, &name, m);
+                }
                 if let Some(b) = lib_book {
                     self.record_move(b.id, &dest);
                 }
@@ -2887,25 +3096,33 @@ pub fn preview(book: &Book, library: &[Book], profile: &Profile) -> String {
 /// Runs the profiles (in order) on `books`. `library` is the whole library
 /// (used by start/end year, first/last issue, series multiple values...).
 /// The undo information of a run that moved files is written to `undo_path`.
+/// `library_folders` are never deleted when they become empty.
 pub fn run(
     books: &[Book],
     library: &[Book],
+    library_folders: &[PathBuf],
     profiles: &[Profile],
     interaction: &dyn Interaction,
     undo_path: &Path,
 ) -> RunResult {
-    Organizer::new(library, interaction).run(books, profiles, undo_path)
+    Organizer::new(library, interaction)
+        .with_library_folders(library_folders)
+        .run(books, profiles, undo_path)
 }
 
-/// Moves the files of the last run back to their original location and
-/// deletes `undo_path`.
+/// Moves the files of the last run back to their original location. The
+/// entries that could not be put back stay in `undo_path`, deleted when none
+/// remain.
 pub fn undo(
     library: &[Book],
+    library_folders: &[PathBuf],
     settings: &OrganizerSettings,
     interaction: &dyn Interaction,
     undo_path: &Path,
 ) -> RunResult {
-    Organizer::new(library, interaction).undo(settings, undo_path)
+    Organizer::new(library, interaction)
+        .with_library_folders(library_folders)
+        .undo(settings, undo_path)
 }
 
 // ---------------------------------------------------------------------------
@@ -3340,7 +3557,7 @@ mod tests {
         let books = setup(tmp.path(), &["a", "b"]);
         let p = run_profile(tmp.path(), Mode::Simulate);
         let undo_file = tmp.path().join("undo.json");
-        let r = run(&books, &books, &[p], &NoInteraction, &undo_file);
+        let r = run(&books, &books, &[], &[p], &NoInteraction, &undo_file);
         assert!(books.iter().all(|b| b.file_path.exists()));
         assert!(!tmp.path().join("out").exists());
         assert!(r.moved.is_empty() && r.simulated && !undo_file.exists());
@@ -3374,6 +3591,7 @@ mod tests {
         let r = run(
             &books,
             &books,
+            &[],
             std::slice::from_ref(&p),
             &NoInteraction,
             &undo_file,
@@ -3398,6 +3616,7 @@ mod tests {
         let r2 = run(
             &moved,
             &moved,
+            &[],
             std::slice::from_ref(&p),
             &NoInteraction,
             &undo_file,
@@ -3409,7 +3628,7 @@ mod tests {
             profiles: vec![p],
             last_used: vec![],
         };
-        let u = undo(&moved, &settings, &NoInteraction, &undo_file);
+        let u = undo(&moved, &[], &settings, &NoInteraction, &undo_file);
         assert!(books.iter().all(|b| b.file_path.exists()), "{:?}", u.log);
         // Empty folders are removed up to (not including) the base folder.
         assert!(!tmp.path().join("out/Dargaud").exists());
@@ -3427,6 +3646,7 @@ mod tests {
         let r = run(
             &books,
             &books,
+            &[],
             &[p],
             &NoInteraction,
             &tmp.path().join("undo.json"),
@@ -3451,6 +3671,7 @@ mod tests {
         let r = run(
             &books,
             &books,
+            &[],
             std::slice::from_ref(&p),
             &NoInteraction,
             &undo_file,
@@ -3477,6 +3698,7 @@ mod tests {
         let r = run(
             std::slice::from_ref(&third),
             &lib,
+            &[],
             std::slice::from_ref(&p),
             &skip,
             &undo_file,
@@ -3487,13 +3709,84 @@ mod tests {
             dup: DuplicateAction::Overwrite,
             ..skip
         };
-        let r = run(std::slice::from_ref(&third), &lib, &[p], &over, &undo_file);
+        let r = run(std::slice::from_ref(&third), &lib, &[], &[p], &over, &undo_file);
         assert_eq!(r.removed, vec![1]);
         assert_eq!(r.read_progress, vec![(3, 7)]);
         assert_eq!(
             fs::read_to_string(folder.join("Blake et Mortimer #01.cbz")).unwrap(),
             "c"
         );
+    }
+
+    fn overwriting() -> Scripted {
+        Scripted {
+            choice: MultiChoice::default(),
+            asked: RefCell::new(0),
+            dup: DuplicateAction::Overwrite,
+        }
+    }
+
+    #[test]
+    fn overwrite_never_deletes_the_book_itself_nor_a_file_of_the_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut books = setup(tmp.path(), &["a", "b"]);
+        books[1].info.number = "1".into();
+        let mut p = run_profile(tmp.path(), Mode::Move);
+        p.remove_empty_folders = false;
+        let undo_file = tmp.path().join("undo.json");
+        let r = run(&books, &books, &[], std::slice::from_ref(&p), &overwriting(), &undo_file);
+        // The second book is renamed: the first one was put there by this run.
+        let folder = tmp.path().join("out/Dargaud/Blake et Mortimer");
+        assert_eq!(fs::read_to_string(folder.join("Blake et Mortimer #01.cbz")).unwrap(), "a");
+        assert_eq!(fs::read_to_string(folder.join("Blake et Mortimer #01 (1).cbz")).unwrap(), "b");
+        assert!(r.removed.is_empty());
+
+        // A copy whose destination is the book itself leaves it alone.
+        let placed = Book { file_path: folder.join("Blake et Mortimer #01.cbz"), ..books[0].clone() };
+        let copy = run_profile(tmp.path(), Mode::Copy);
+        let r = run(std::slice::from_ref(&placed), &books, &[], &[copy], &overwriting(), &undo_file);
+        assert_eq!(fs::read_to_string(&placed.file_path).unwrap(), "a");
+        assert!(r.removed.is_empty() && r.added.is_empty());
+        assert_eq!(r.log[0].action, "Skipped");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_destination_reached_through_a_link_is_the_book_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        let books = setup(tmp.path(), &["a"]);
+        let p = run_profile(tmp.path(), Mode::Move);
+        let undo_file = tmp.path().join("undo.json");
+        let r = run(&books, &books, &[], std::slice::from_ref(&p), &NoInteraction, &undo_file);
+        let placed = Book { file_path: r.moved[0].1.clone(), ..books[0].clone() };
+        std::os::unix::fs::symlink(tmp.path().join("out"), tmp.path().join("link")).unwrap();
+        let linked = Profile { base_folder: path_str(&tmp.path().join("link")), ..p };
+        let r = run(std::slice::from_ref(&placed), &books, &[], &[linked], &overwriting(), &undo_file);
+        assert_eq!(fs::read_to_string(&placed.file_path).unwrap(), "a");
+        assert!(r.moved.is_empty() && r.removed.is_empty());
+    }
+
+    #[test]
+    fn library_folders_are_kept_and_undo_keeps_what_failed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let books = setup(tmp.path(), &["a", "b"]);
+        let p = run_profile(tmp.path(), Mode::Move);
+        let undo_file = tmp.path().join("undo.json");
+        let library = [tmp.path().join("in")];
+        let r = run(&books, &books, &library, std::slice::from_ref(&p), &NoInteraction, &undo_file);
+        assert_eq!(r.moved.len(), 2);
+        assert!(tmp.path().join("in").is_dir(), "library folder left empty, not deleted");
+
+        // One moved file is gone: the other is put back, the missing one
+        // stays in the undo file.
+        fs::remove_file(&r.moved[0].1).unwrap();
+        let settings = OrganizerSettings { profiles: vec![p], last_used: vec![] };
+        let u = undo(&books, &library, &settings, &NoInteraction, &undo_file);
+        assert!(u.summary.starts_with("Successfully moved: 1"), "{}", u.summary);
+        assert!(books[1].file_path.exists());
+        let left: Vec<UndoEntry> = serde_json::from_str(&fs::read_to_string(&undo_file).unwrap()).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].original, books[0].file_path);
     }
 
     #[test]
@@ -3508,6 +3801,7 @@ mod tests {
         let r = run(
             &books,
             &books,
+            &[],
             &[p1.clone(), p2],
             &NoInteraction,
             &tmp.path().join("u"),
@@ -3523,7 +3817,7 @@ mod tests {
                 .ends_with("Blake et Mortimer - 001.cbz")
         );
         p1.exclude_folders = vec![path_str(&tmp.path().join("in"))];
-        let r = run(&books, &books, &[p1], &NoInteraction, &tmp.path().join("u"));
+        let r = run(&books, &books, &[], &[p1], &NoInteraction, &tmp.path().join("u"));
         assert_eq!(r.log[0].message, tr(msg::EXCLUDED_PATH));
         assert!(report_text(&r).contains("Skipped: "));
     }

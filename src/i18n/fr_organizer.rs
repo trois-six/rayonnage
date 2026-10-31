@@ -313,4 +313,16 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Organize files (Ctrl+L)", "Ranger les fichiers (Ctrl+L)"),
     ("Organize with a profile", "Ranger avec un profil"),
     ("Organize with the profile", "Ranger avec le profil"),
+    (
+        "incomplete copy: {0} of {1} bytes",
+        "copie incomplète : {0} octets sur {1}",
+    ),
+    (
+        "Copied to {0}, but the original could not be deleted: {1}",
+        "Copié vers {0}, mais l'original n'a pas pu être supprimé : {1}",
+    ),
+    (
+        "The folder {0} is not a full path.",
+        "Le dossier {0} n'est pas un chemin complet.",
+    ),
 ];

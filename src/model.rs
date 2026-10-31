@@ -346,11 +346,80 @@ impl Default for ComicInfo {
     }
 }
 
+/// Paths are stored as text, or as raw bytes when they are not valid UTF-8
+/// (a Latin-1 file name on Linux), which text cannot hold.
+mod path_serde {
+    use std::fmt;
+    use std::path::{Path, PathBuf};
+
+    use serde::de::{self, SeqAccess, Visitor};
+    use serde::{Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(path: &Path, s: S) -> Result<S::Ok, S::Error> {
+        match path.to_str() {
+            Some(text) => s.serialize_str(text),
+            None => s.serialize_bytes(path.as_os_str().as_encoded_bytes()),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PathBuf, D::Error> {
+        d.deserialize_any(PathVisitor)
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> PathBuf {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            PathBuf::from(std::ffi::OsString::from_vec(bytes))
+        }
+        #[cfg(not(unix))]
+        {
+            PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+        }
+    }
+
+    struct PathVisitor;
+
+    impl<'de> Visitor<'de> for PathVisitor {
+        type Value = PathBuf;
+
+        fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            f.write_str("a path, as text or bytes")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<PathBuf, E> {
+            Ok(PathBuf::from(v))
+        }
+
+        fn visit_string<E: de::Error>(self, v: String) -> Result<PathBuf, E> {
+            Ok(PathBuf::from(v))
+        }
+
+        fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<PathBuf, E> {
+            Ok(from_bytes(v.to_vec()))
+        }
+
+        fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<PathBuf, E> {
+            Ok(from_bytes(v))
+        }
+
+        /// Bytes written by a text format (JSON) come back as a list.
+        fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<PathBuf, A::Error> {
+            let mut bytes = Vec::new();
+            while let Some(b) = seq.next_element()? {
+                bytes.push(b);
+            }
+            Ok(from_bytes(bytes))
+        }
+    }
+}
+
 /// A book in the library.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Book {
     pub id: u64,
+    #[serde(with = "path_serde")]
     pub file_path: PathBuf,
     #[serde(skip_serializing_if = "is_default")]
     pub file_size: u64,
@@ -1079,6 +1148,23 @@ pub fn default_book_cmp(a: &Book, b: &Book) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn book_paths_that_are_not_utf8_are_kept() {
+        let text = Book { file_path: "/b/Café.cbz".into(), ..Default::default() };
+        let back: Book = rmp_serde::from_slice(&rmp_serde::to_vec_named(&text).unwrap()).unwrap();
+        assert_eq!(back.file_path, text.file_path);
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let latin1 = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/b/caf\xe9.cbz")).to_path_buf();
+            let b = Book { file_path: latin1.clone(), ..Default::default() };
+            let back: Book = rmp_serde::from_slice(&rmp_serde::to_vec_named(&b).unwrap()).unwrap();
+            assert_eq!(back.file_path, latin1);
+            let back: Book = serde_json::from_str(&serde_json::to_string(&b).unwrap()).unwrap();
+            assert_eq!(back.file_path, latin1);
+        }
+    }
 
     #[test]
     fn proposed() {
