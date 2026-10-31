@@ -1385,6 +1385,7 @@ pub fn write_files(state: &State, books: Vec<Book>) {
 
 fn refresh(state: &State, force: bool) {
     let Some(books) = state.require_selection() else { return };
+    let folders = state.settings.borrow().library_folders.clone();
     run_job(
         state,
         t!("Rereading files…"),
@@ -1392,6 +1393,10 @@ fn refresh(state: &State, force: bool) {
             let total = books.len();
             let mut ok = Vec::new();
             let mut errors = Vec::new();
+            // Books whose file no longer exists, removed from the library. A
+            // file whose folder cannot be reached either (drive not mounted)
+            // stays an error.
+            let mut gone = Vec::new();
             // As in ComicRack, a simple refresh leaves alone the books whose
             // changes are not written to their file yet.
             let mut skipped = Vec::new();
@@ -1400,6 +1405,14 @@ fn refresh(state: &State, force: bool) {
                     break;
                 }
                 ctx.progress(i, total, b.file_name());
+                let reachable = |dir: &std::path::Path| dir.is_dir();
+                if !b.file_path.exists()
+                    && (b.file_path.parent().is_some_and(reachable)
+                        || folders.iter().any(|f| b.file_path.starts_with(f) && reachable(f)))
+                {
+                    gone.push((b.id, b.file_path.display().to_string()));
+                    continue;
+                }
                 if b.info_dirty && !force {
                     skipped.push(b.file_path.display().to_string());
                     continue;
@@ -1412,12 +1425,15 @@ fn refresh(state: &State, force: bool) {
                     Err(e) => errors.push(t!("{0}: {1}", b.file_path.display(), format!("{e:#}"))),
                 }
             }
-            (ok, errors, skipped)
+            (ok, errors, skipped, gone)
         },
-        |st, (ok, errors, skipped)| {
+        |st, (ok, errors, skipped, gone)| {
             let n = ok.len();
             for b in &ok {
                 st.journal.info(&t!("Reread: {0}", b.file_path.display()));
+            }
+            for (_, p) in &gone {
+                st.journal.info(&t!("Removed (file not found): {0}", p));
             }
             for p in &skipped {
                 st.journal.info(&t!("Not reread (changes not written to the file): {0}", p));
@@ -1426,7 +1442,17 @@ fn refresh(state: &State, force: bool) {
                 st.journal.error(e);
             }
             st.update_books(ok, false);
+            if !gone.is_empty() {
+                let ids: Vec<u64> = gone.iter().map(|(id, _)| *id).collect();
+                st.remove_books(&ids);
+                st.save_library();
+                refresh_sidebar(st);
+                update_status(st);
+            }
             let mut msg = t!("{0} book(s) refreshed", n);
+            if !gone.is_empty() {
+                msg.push_str(&t!(" — {0} book(s) removed from the library: file not found", gone.len()));
+            }
             if !skipped.is_empty() {
                 msg.push_str(&t!(
                     " — {0} book(s) with unwritten changes left alone: use \u{201c}Refresh (force reread)\u{201d} to discard the changes",

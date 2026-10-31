@@ -97,6 +97,10 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Reread: {0}", "Relu : {0}"),
     ("{0} book(s) refreshed", "{0} livre(s) rafraîchi(s)"),
     (
+        " — {0} book(s) removed from the library: file not found",
+        " — {0} livre(s) retiré(s) de la bibliothèque : fichier introuvable",
+    ),
+    (
         "Remove {0} book(s) from the library? The files are not deleted (they will reappear at the next scan if they are in a scanned folder).",
         "Retirer {0} livre(s) de la bibliothèque ? Les fichiers ne sont pas supprimés (ils réapparaîtront au prochain scan s'ils sont dans un dossier scanné).",
     ),

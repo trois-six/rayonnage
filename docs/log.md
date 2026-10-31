@@ -1,6 +1,7 @@
 # Documentation Update Log
 
 ## 2026-10-31
+* **Update**: [Book Files §3](book-files.md#3-refreshing-from-the-files) — refreshing a book whose file no longer exists removes it from the library.
 * **Update**: [Library §3](library.md#3-scanning) — the scan follows renamed and moved book files, and removes the books gone from outside the library folders.
 
 ## 2026-10-29

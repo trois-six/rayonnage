@@ -66,3 +66,7 @@ again.
   file yet. The log lists the books left alone.
 - **Refresh (force reread)** replaces the library values with those of the
   files, discarding the changes that were not written.
+- A book whose file no longer exists is removed from the library, and
+  listed in the log. When its folder cannot be reached either (drive or
+  network share not mounted), it stays in the library and the refresh
+  reports an error.
