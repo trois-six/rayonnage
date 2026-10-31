@@ -10,7 +10,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use super::widgets::{self, Form};
-use super::{JobCtx, State, refresh_sidebar, run_job};
+use super::{JobCtx, JobKind, State, refresh_sidebar, run_job};
 use crate::model::{Book, Field};
 use crate::organizer::{
     self, DEFAULT_ILLEGAL_CHARACTERS, DuplicateAction, EMPTY_DATA_FIELDS, ExcludeMode,
@@ -105,6 +105,8 @@ pub fn undo(state: &State) {
             let settings = st.settings.borrow().organizer.clone();
             run_job(
                 &st,
+                JobKind::Organize,
+                Vec::new(),
                 t!("Undoing the organization…"),
                 move |ctx| organizer::undo(&library, &settings, &JobInteraction { ctx }, &path),
                 |st, r| apply_result(st, r, t!("Organization undo")),
@@ -135,8 +137,11 @@ fn launch(state: &State, books: Vec<Book>, profiles: Vec<Profile>) {
     let books = shadow(&books);
     let library = shadow(&state.library.borrow().books);
     let undo_path = Settings::undo_path();
+    let ids = books.iter().map(|b| b.id).collect();
     run_job(
         state,
+        JobKind::Organize,
+        ids,
         t!("Organizing books…"),
         move |ctx| {
             organizer::run(

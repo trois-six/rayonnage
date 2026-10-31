@@ -8,6 +8,7 @@ mod edit_dialog;
 mod icons;
 mod import_dialog;
 mod inline_edit;
+mod jobs;
 mod journal;
 mod missing_folders;
 mod organizer_ui;
@@ -21,8 +22,6 @@ pub mod widgets;
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 
 use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
@@ -32,6 +31,7 @@ use crate::library::{self, Library, ScanEvent};
 use crate::model::{Book, Field, default_book_cmp};
 use crate::settings::Settings;
 pub use book_object::BookObject;
+pub use jobs::{JobCtx, JobKind, run_job};
 
 pub const APP_ID: &str = "org.troissix.Rayonnage";
 
@@ -58,9 +58,9 @@ pub struct AppState {
     source: RefCell<Source>,
     search_text: RefCell<String>,
     status: gtk::Label,
-    progress: gtk::ProgressBar,
-    cancel_button: gtk::Button,
-    busy: Cell<bool>,
+    /// One line per operation, running or waiting.
+    jobs_box: gtk::Box,
+    jobs: RefCell<Vec<Rc<jobs::Job>>>,
     /// The user confirmed quitting while an operation was running.
     quitting: Cell<bool>,
     columns_save_pending: Cell<bool>,
@@ -126,8 +126,7 @@ pub fn build_ui(app: &gtk::Application) {
     column_view.add_css_class("zebra");
 
     let status = gtk::Label::builder().xalign(0.0).hexpand(true).ellipsize(gtk::pango::EllipsizeMode::End).build();
-    let progress = gtk::ProgressBar::builder().visible(false).valign(gtk::Align::Center).width_request(220).build();
-    let cancel_button = gtk::Button::builder().label(t!("Cancel")).visible(false).build();
+    let jobs_box = gtk::Box::new(gtk::Orientation::Vertical, 2);
 
     let info_cover = gtk::Picture::builder()
         .content_fit(gtk::ContentFit::Contain)
@@ -169,9 +168,8 @@ pub fn build_ui(app: &gtk::Application) {
         source: RefCell::new(Source::All),
         search_text: RefCell::new(String::new()),
         status,
-        progress,
-        cancel_button,
-        busy: Cell::new(false),
+        jobs_box,
+        jobs: RefCell::new(Vec::new()),
         quitting: Cell::new(false),
         columns_save_pending: Cell::new(false),
         save_pending: Cell::new(false),
@@ -213,7 +211,7 @@ pub fn build_ui(app: &gtk::Application) {
         #[upgrade_or]
         glib::Propagation::Proceed,
         move |w| {
-            if state.busy.get() && !state.quitting.get() {
+            if state.busy() && !state.quitting.get() {
                 let st = state.clone();
                 widgets::confirm(
                     w,
@@ -222,7 +220,7 @@ pub fn build_ui(app: &gtk::Application) {
                     t!("Quit"),
                     move || {
                         st.quitting.set(true);
-                        st.cancel_button.emit_clicked();
+                        st.cancel_jobs();
                         st.journal.title(t!("Quit requested during an operation"));
                         st.window.close();
                     },
@@ -587,8 +585,7 @@ fn build_layout(state: &State) -> gtk::Box {
         .margin_bottom(4)
         .build();
     status_bar.append(&state.status);
-    status_bar.append(&state.progress);
-    status_bar.append(&state.cancel_button);
+    status_bar.append(&state.jobs_box);
     status_bar.append(&state.journal.button);
 
     let root = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -791,9 +788,6 @@ pub fn refresh_sidebar(state: &State) {
 }
 
 fn update_status(state: &State) {
-    if state.busy.get() {
-        return;
-    }
     let shown = state.sort_model.n_items();
     let total = state.store.n_items();
     let sel = state.selection.selection().size();
@@ -914,8 +908,15 @@ impl AppState {
     }
 
     /// Replaces books (matched by id) in the library and the list.
-    /// `dirty` marks their metadata as not yet written into the files.
+    /// `dirty` marks their metadata as not yet written into the files, which
+    /// are then updated when that is automatic.
     pub fn update_books(self: &Rc<Self>, books: Vec<Book>, dirty: bool) {
+        self.replace_books(books, dirty, dirty);
+    }
+
+    /// Like `update_books`; `write` updates the files when that is automatic.
+    /// A book given the path of another book replaces it: one book per file.
+    fn replace_books(self: &Rc<Self>, books: Vec<Book>, dirty: bool, write: bool) {
         if books.is_empty() {
             return;
         }
@@ -924,33 +925,50 @@ impl AppState {
             .map(|o| (o.id(), o))
             .collect();
         let mut written = Vec::new();
-        {
+        let duplicates: Vec<u64> = {
             let mut lib = self.library.borrow_mut();
             for mut b in books {
                 if dirty {
                     b.info_dirty = true;
                 }
-                if let Some(slot) = lib.get_mut(b.id) {
-                    *slot = b.clone();
-                }
+                let Some(slot) = lib.get_mut(b.id) else { continue };
+                *slot = b.clone();
                 if let Some(o) = objects.get(&b.id) {
                     o.set_book(b.clone());
                 }
                 written.push(b);
             }
-        }
+            let paths: std::collections::HashMap<&std::path::Path, u64> =
+                written.iter().map(|b| (b.file_path.as_path(), b.id)).collect();
+            lib.books
+                .iter()
+                .filter(|b| paths.get(b.file_path.as_path()).is_some_and(|&id| id != b.id))
+                .map(|b| b.id)
+                .collect()
+        };
+        self.remove_books(&duplicates);
         self.save_library();
         self.resort();
         refresh_sidebar(self);
         update_info_panel(self);
-        // During a job, the job itself writes the files at the end.
-        if dirty
-            && !self.busy.get()
-            && self.settings.borrow().auto_update_files
-            && self.settings.borrow().allow_write_info
-        {
+        if write && self.settings.borrow().auto_update_files && self.settings.borrow().allow_write_info {
             write_files(self, written);
         }
+    }
+
+    /// Changes books in place: `f` gets each book as it is now in the
+    /// library, and returns whether it changed it. For the results of an
+    /// operation, which may have run while other operations changed the
+    /// same books.
+    pub fn edit_books(self: &Rc<Self>, ids: impl IntoIterator<Item = u64>, mut f: impl FnMut(&mut Book) -> bool) {
+        let changed: Vec<Book> = {
+            let lib = self.library.borrow();
+            ids.into_iter()
+                .filter_map(|id| lib.get(id).cloned())
+                .filter_map(|mut b| f(&mut b).then_some(b))
+                .collect()
+        };
+        self.replace_books(changed, false, false);
     }
 
     pub fn add_books(self: &Rc<Self>, books: Vec<Book>) {
@@ -966,26 +984,34 @@ impl AppState {
     }
 
     /// Adds/updates the books found by a scan (called during the scan).
-    fn apply_scanned(self: &Rc<Self>, added: Vec<Book>, updated: Vec<Book>) {
-        self.add_books(added);
-        if !updated.is_empty() {
-            let mut lib = self.library.borrow_mut();
-            for b in &updated {
-                if let Some(slot) = lib.get_mut(b.id) {
-                    *slot = b.clone();
-                }
+    /// The changes apply to the books as they are now: other operations may
+    /// have changed them since the scan began.
+    fn apply_scanned(self: &Rc<Self>, added: Vec<Book>, changes: Vec<ScanEvent>) {
+        let mut changes: std::collections::HashMap<u64, ScanEvent> = changes
+            .into_iter()
+            .filter_map(|ev| match &ev {
+                ScanEvent::Updated(c) => Some((c.id, ev)),
+                ScanEvent::Moved { id, .. } => Some((*id, ev)),
+                _ => None,
+            })
+            .collect();
+        self.edit_books(changes.keys().copied().collect::<Vec<_>>(), |b| match changes.remove(&b.id) {
+            // Unwritten changes are kept: only the empty values are filled.
+            Some(ScanEvent::Updated(c)) => {
+                let force = !b.info_dirty;
+                c.apply(b, force)
             }
-            drop(lib);
-            let objects: std::collections::HashMap<u64, BookObject> = (0..self.store.n_items())
-                .filter_map(|i| self.store.item(i).and_downcast::<BookObject>())
-                .map(|o| (o.id(), o))
-                .collect();
-            for b in updated {
-                if let Some(o) = objects.get(&b.id) {
-                    o.set_book(b);
-                }
+            Some(ScanEvent::Moved { from, to, modified, .. }) if b.file_path == from => {
+                b.file_path = to;
+                b.file_modified = modified;
+                true
             }
-        }
+            _ => false,
+        });
+        // A file added meanwhile by another operation is not added again.
+        let known: std::collections::HashSet<PathBuf> =
+            self.library.borrow().books.iter().map(|b| b.file_path.clone()).collect();
+        self.add_books(added.into_iter().filter(|b| !known.contains(&b.file_path)).collect());
         refresh_sidebar(self);
     }
 
@@ -1023,170 +1049,6 @@ impl AppState {
 }
 
 // ---------------------------------------------------------------------------
-// Background jobs
-// ---------------------------------------------------------------------------
-
-type UiFn = Box<dyn FnOnce(&State) + Send>;
-
-enum JobMsg {
-    Progress(f64, String),
-    /// Progress of unknown length.
-    Pulse(String),
-    Log(String),
-    Error(String),
-    Ui(UiFn),
-    Finished,
-}
-
-/// Handle given to the worker thread of a job.
-#[derive(Clone)]
-pub struct JobCtx {
-    tx: async_channel::Sender<JobMsg>,
-    cancel: Arc<AtomicBool>,
-}
-
-impl JobCtx {
-    pub fn progress(&self, done: usize, total: usize, text: impl Into<String>) {
-        let frac = if total == 0 { 0.0 } else { done as f64 / total as f64 };
-        let _ = self.tx.send_blocking(JobMsg::Progress(frac, text.into()));
-    }
-
-    /// Activity of unknown length (the progress bar bounces).
-    pub fn pulse(&self, text: impl Into<String>) {
-        let _ = self.tx.send_blocking(JobMsg::Pulse(text.into()));
-    }
-
-    /// Adds a line to the message journal.
-    pub fn log(&self, msg: impl Into<String>) {
-        let _ = self.tx.send_blocking(JobMsg::Log(msg.into()));
-    }
-
-    /// Adds an error to the message journal.
-    pub fn error(&self, msg: impl Into<String>) {
-        let _ = self.tx.send_blocking(JobMsg::Error(msg.into()));
-    }
-
-    pub fn cancelled(&self) -> bool {
-        self.cancel.load(Ordering::Relaxed)
-    }
-
-    /// Runs `f` on the GTK thread.
-    pub fn ui(&self, f: impl FnOnce(&State) + Send + 'static) {
-        let _ = self.tx.send_blocking(JobMsg::Ui(Box::new(f)));
-    }
-
-    /// Asks something on the GTK thread and blocks until `reply` is called.
-    pub fn ask<R: Send + 'static>(
-        &self,
-        f: impl FnOnce(&State, Box<dyn FnOnce(R) + Send>) + Send + 'static,
-    ) -> Option<R> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.ui(move |st| {
-            f(
-                st,
-                Box::new(move |r| {
-                    let _ = tx.send(r);
-                }),
-            )
-        });
-        rx.recv().ok()
-    }
-
-    /// Sleeps in small steps, returning early when cancelled.
-    pub fn sleep(&self, secs: u32) {
-        for _ in 0..secs * 10 {
-            if self.cancelled() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(100));
-        }
-    }
-}
-
-/// Runs `work` in a thread with a progress bar; `done` gets its result on the GTK thread.
-pub fn run_job<T: Send + 'static>(
-    state: &State,
-    title: &str,
-    work: impl FnOnce(JobCtx) -> T + Send + 'static,
-    done: impl FnOnce(&State, T) + 'static,
-) {
-    if state.busy.replace(true) {
-        widgets::alert(&state.window, t!("Operation in progress"), t!("Wait for the current operation to finish."));
-        return;
-    }
-    let (tx, rx) = async_channel::unbounded::<JobMsg>();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let ctx = JobCtx { tx: tx.clone(), cancel: cancel.clone() };
-    let result: Arc<Mutex<Option<T>>> = Arc::new(Mutex::new(None));
-    let slot = result.clone();
-
-    state.status.set_text(title);
-    state.journal.title(&format!("▶ {}", title.trim_end_matches('…')));
-    state.journal.set_active(true);
-    let started = std::time::Instant::now();
-    state.progress.set_fraction(0.0);
-    state.progress.set_visible(true);
-    state.cancel_button.set_visible(true);
-    state.cancel_button.set_sensitive(true);
-    let cancel_flag = cancel.clone();
-    let handler = state.cancel_button.connect_clicked(move |b| {
-        cancel.store(true, Ordering::Relaxed);
-        b.set_sensitive(false);
-    });
-
-    std::thread::spawn(move || {
-        let r = work(ctx);
-        *slot.lock().unwrap() = Some(r);
-        let _ = tx.send_blocking(JobMsg::Finished);
-    });
-
-    let weak = Rc::downgrade(state);
-    let title = title.to_string();
-    glib::spawn_future_local(async move {
-        let mut done = Some(done);
-        let mut handler = Some(handler);
-        while let Ok(msg) = rx.recv().await {
-            let Some(st) = weak.upgrade() else { return };
-            match msg {
-                JobMsg::Progress(f, text) => {
-                    st.progress.set_fraction(f);
-                    st.status.set_text(&format!("{title} {text}"));
-                }
-                JobMsg::Pulse(text) => {
-                    st.progress.pulse();
-                    st.status.set_text(&format!("{title} {text}"));
-                }
-                JobMsg::Log(msg) => st.journal.info(&msg),
-                JobMsg::Error(msg) => st.journal.error(&msg),
-                JobMsg::Ui(f) => f(&st),
-                JobMsg::Finished => {
-                    let name = title.trim_end_matches('…');
-                    let secs = started.elapsed().as_secs_f64();
-                    if cancel_flag.load(Ordering::Relaxed) {
-                        st.journal.title(&t!("■ {0}: cancelled after {1} s", name, format!("{secs:.1}")));
-                    } else {
-                        st.journal.title(&t!("■ {0}: finished in {1} s", name, format!("{secs:.1}")));
-                    }
-                    st.journal.set_active(false);
-                    st.busy.set(false);
-                    st.progress.set_visible(false);
-                    st.cancel_button.set_visible(false);
-                    if let Some(h) = handler.take() {
-                        st.cancel_button.disconnect(h);
-                    }
-                    update_status(&st);
-                    let r = result.lock().unwrap().take();
-                    if let (Some(r), Some(done)) = (r, done.take()) {
-                        done(&st, r);
-                    }
-                    return;
-                }
-            }
-        }
-    });
-}
-
-// ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
 
@@ -1201,6 +1063,10 @@ pub fn scan(state: &State) {
         settings_dialog::open(state);
         return;
     }
+    if state.has_job(JobKind::Scan) {
+        state.set_status(t!("A scan is already in progress."));
+        return;
+    }
     missing_folders::check(state, scan_folders);
 }
 
@@ -1213,6 +1079,8 @@ fn scan_folders(state: &State) {
     }
     run_job(
         state,
+        JobKind::Scan,
+        Vec::new(),
         t!("Scanning library…"),
         move |ctx| {
             let mut stats = ScanStats::default();
@@ -1221,7 +1089,7 @@ fn scan_folders(state: &State) {
             let mut added = Vec::new();
             let mut updated = Vec::new();
             let mut last_flush = std::time::Instant::now();
-            let flush = |added: &mut Vec<Book>, updated: &mut Vec<Book>| {
+            let flush = |added: &mut Vec<Book>, updated: &mut Vec<ScanEvent>| {
                 if added.is_empty() && updated.is_empty() {
                     return;
                 }
@@ -1244,18 +1112,17 @@ fn scan_folders(state: &State) {
                     ScanEvent::Added(b) => {
                         c.log(t!("Added: {0} ({1} pages)", b.file_path.display(), b.info.page_count));
                         stats.added += 1;
-                        added.push(b);
+                        added.push(*b);
                     }
-                    ScanEvent::Updated(b) => {
-                        c.log(t!("Updated: {0}", b.file_path.display()));
+                    ScanEvent::Updated(change) => {
+                        c.log(t!("Updated: {0}", change.path.display()));
                         stats.updated += 1;
-                        updated.push(b);
+                        updated.push(ScanEvent::Updated(change));
                     }
-                    ScanEvent::Moved { book, from, replaces } => {
-                        c.log(t!("Moved: {0} → {1}", from.display(), book.file_path.display()));
+                    ScanEvent::Moved { id, from, to, modified } => {
+                        c.log(t!("Moved: {0} → {1}", from.display(), to.display()));
                         stats.moved += 1;
-                        stats.replaced.extend(replaces);
-                        updated.push(book);
+                        updated.push(ScanEvent::Moved { id, from, to, modified });
                     }
                     ScanEvent::Error(e) => {
                         c.error(e);
@@ -1275,17 +1142,23 @@ fn scan_folders(state: &State) {
             stats
         },
         |st, stats| {
-            // The books added again by an earlier scan at the new path of a
-            // moved book.
-            st.remove_books(&stats.replaced);
             let nm = stats.missing.len();
             if st.settings.borrow().remove_missing && !stats.missing.is_empty() {
-                for id in &stats.missing {
-                    if let Some(b) = st.library.borrow().get(*id) {
-                        st.journal.info(&t!("Removed (file not found): {0}", b.file_path.display()));
-                    }
-                }
-                st.remove_books(&stats.missing);
+                // Only the books still at the path found missing: another
+                // operation may have moved them during the scan.
+                let gone: Vec<u64> = {
+                    let lib = st.library.borrow();
+                    stats
+                        .missing
+                        .iter()
+                        .filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path))
+                        .map(|(id, path)| {
+                            st.journal.info(&t!("Removed (file not found): {0}", path.display()));
+                            *id
+                        })
+                        .collect()
+                };
+                st.remove_books(&gone);
             }
             st.save_library();
             st.resort();
@@ -1319,8 +1192,7 @@ struct ScanStats {
     updated: usize,
     moved: usize,
     errors: usize,
-    missing: Vec<u64>,
-    replaced: Vec<u64>,
+    missing: Vec<(u64, PathBuf)>,
     cancelled: bool,
 }
 
@@ -1339,8 +1211,11 @@ fn update_files(state: &State) {
 }
 
 pub fn write_files(state: &State, books: Vec<Book>) {
+    let ids = books.iter().map(|b| b.id).collect();
     run_job(
         state,
+        JobKind::WriteFiles,
+        ids,
         t!("Updating book files…"),
         move |ctx| {
             let total = books.len();
@@ -1377,7 +1252,17 @@ pub fn write_files(state: &State, books: Vec<Book>) {
             for e in &errors {
                 st.journal.error(e);
             }
-            st.update_books(ok, false);
+            // The information written is no longer pending, unless it
+            // changed during the writing.
+            let written: std::collections::HashMap<u64, Book> = ok.into_iter().map(|b| (b.id, b)).collect();
+            st.edit_books(written.keys().copied().collect::<Vec<_>>(), |b| {
+                let Some(w) = written.get(&b.id).filter(|w| w.file_path == b.file_path) else { return false };
+                (b.file_size, b.file_modified, b.file_created) = (w.file_size, w.file_modified, w.file_created);
+                if b.info == w.info {
+                    b.info_dirty = false;
+                }
+                true
+            });
             st.set_status(&with_errors(t!("{0} file(s) updated", n), errors.len()));
         },
     );
@@ -1388,6 +1273,8 @@ fn refresh(state: &State, force: bool) {
     let folders = state.settings.borrow().library_folders.clone();
     run_job(
         state,
+        JobKind::Refresh,
+        Vec::new(),
         t!("Rereading files…"),
         move |ctx| {
             let total = books.len();
@@ -1410,41 +1297,59 @@ fn refresh(state: &State, force: bool) {
                     && (b.file_path.parent().is_some_and(reachable)
                         || folders.iter().any(|f| b.file_path.starts_with(f) && reachable(f)))
                 {
-                    gone.push((b.id, b.file_path.display().to_string()));
+                    gone.push((b.id, b.file_path));
                     continue;
                 }
                 if b.info_dirty && !force {
                     skipped.push(b.file_path.display().to_string());
                     continue;
                 }
-                match library::refresh_from_file(&mut b, force) {
-                    Ok(()) => {
-                        b.info_dirty = false;
-                        ok.push(b);
-                    }
+                b.refresh_file_stats();
+                match archive::read_content_with(&b.file_path, None) {
+                    Ok(content) => ok.push((b, content)),
                     Err(e) => errors.push(t!("{0}: {1}", b.file_path.display(), format!("{e:#}"))),
                 }
             }
             (ok, errors, skipped, gone)
         },
-        |st, (ok, errors, skipped, gone)| {
+        move |st, (ok, errors, skipped, gone)| {
             let n = ok.len();
-            for b in &ok {
+            for (b, _) in &ok {
                 st.journal.info(&t!("Reread: {0}", b.file_path.display()));
             }
-            for (_, p) in &gone {
-                st.journal.info(&t!("Removed (file not found): {0}", p));
-            }
+            // Unless another operation gave them another file meanwhile.
+            let gone: Vec<u64> = {
+                let lib = st.library.borrow();
+                gone.into_iter()
+                    .filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path))
+                    .map(|(id, path)| {
+                        st.journal.info(&t!("Removed (file not found): {0}", path.display()));
+                        id
+                    })
+                    .collect()
+            };
             for p in &skipped {
                 st.journal.info(&t!("Not reread (changes not written to the file): {0}", p));
             }
             for e in &errors {
                 st.journal.error(e);
             }
-            st.update_books(ok, false);
+            // Applied to the books as they are now, if they still have that
+            // file.
+            let mut read: std::collections::HashMap<u64, (Book, archive::BookContent)> =
+                ok.into_iter().map(|(b, c)| (b.id, (b, c))).collect();
+            st.edit_books(read.keys().copied().collect::<Vec<_>>(), |b| {
+                let Some((r, content)) = read.remove(&b.id).filter(|(r, _)| r.file_path == b.file_path) else { return false };
+                (b.file_size, b.file_modified, b.file_created) = (r.file_size, r.file_modified, r.file_created);
+                library::apply_content(b, content, force);
+                // A forced reread discards the changes not written.
+                if force {
+                    b.info_dirty = false;
+                }
+                true
+            });
             if !gone.is_empty() {
-                let ids: Vec<u64> = gone.iter().map(|(id, _)| *id).collect();
-                st.remove_books(&ids);
+                st.remove_books(&gone);
                 st.save_library();
                 refresh_sidebar(st);
                 update_status(st);

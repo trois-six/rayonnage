@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, mpsc};
 use std::time::{Instant, SystemTime};
+
+use chrono::{DateTime, Local};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -271,12 +273,13 @@ pub fn moved_like(from: &Path, to: &Path, other: &Path) -> Option<PathBuf> {
 /// with Ctrl); otherwise only empty values are filled.
 pub fn refresh_from_file(book: &mut Book, force: bool) -> Result<()> {
     book.refresh_file_stats();
-    load_content(book, force, None)
+    apply_content(book, archive::read_content_with(&book.file_path, None)?, force);
+    Ok(())
 }
 
-/// Reads the metadata and page count of the book file (file stats untouched).
-fn load_content(book: &mut Book, force: bool, existing: Option<&HashSet<PathBuf>>) -> Result<()> {
-    let content = archive::read_content_with(&book.file_path, existing)?;
+/// Puts the metadata and page count read from the book file into the book
+/// (file stats untouched).
+pub fn apply_content(book: &mut Book, content: archive::BookContent, force: bool) {
     if let Some(info) = content.info {
         if force || book.info == crate::model::ComicInfo::default() {
             book.info = info;
@@ -287,7 +290,6 @@ fn load_content(book: &mut Book, force: bool, existing: Option<&HashSet<PathBuf>
     if content.page_count > 0 {
         book.info.page_count = content.page_count as i32;
     }
-    Ok(())
 }
 
 fn fill_empty(book: &mut Book, info: &crate::model::ComicInfo) {
@@ -314,14 +316,44 @@ pub enum ScanEvent {
     /// About to read file `done + 1` of `total`.
     Progress { done: usize, total: usize, current: String },
     /// A new book file (id not yet assigned).
-    Added(Book),
+    Added(Box<Book>),
     /// An already known book whose file changed on disk.
-    Updated(Book),
-    /// A known book whose file was renamed or moved: the book with its new
-    /// path, and the book already known at that path, that it replaces.
-    Moved { book: Book, from: PathBuf, replaces: Option<u64> },
+    Updated(Box<FileChange>),
+    /// A known book whose file was renamed or moved. A book already known at
+    /// the new path (added again by an earlier scan) is replaced by it.
+    Moved { id: u64, from: PathBuf, to: PathBuf, modified: Option<DateTime<Local>> },
     Error(String),
-    Finished { missing: Vec<u64>, cancelled: bool },
+    /// `missing`: the books whose file is gone, with the path it had.
+    Finished { missing: Vec<(u64, PathBuf)>, cancelled: bool },
+}
+
+/// A known book file changed on disk, read again. The scan runs while other
+/// operations change the library: the change is applied to the book as it
+/// is when the scan reports it, if it still has that file.
+pub struct FileChange {
+    pub id: u64,
+    pub path: PathBuf,
+    pub size: u64,
+    pub modified: Option<DateTime<Local>>,
+    /// What was read from the file; None when it could not be read.
+    pub content: Option<archive::BookContent>,
+}
+
+impl FileChange {
+    /// Applies the change to the book, unless it changed file since. With
+    /// `force`, the information read replaces the book's; otherwise only the
+    /// empty values are filled.
+    pub fn apply(self, book: &mut Book, force: bool) -> bool {
+        if book.file_path != self.path {
+            return false;
+        }
+        book.file_size = self.size;
+        book.file_modified = self.modified;
+        if let Some(c) = self.content {
+            apply_content(book, c, force);
+        }
+        true
+    }
 }
 
 /// A book file found by the folder walk, with the stats read from the listing.
@@ -511,50 +543,45 @@ pub fn scan(
     let (gone, lost) = gone_books(&folders, &walk, &known, &found);
     // A book whose file is gone follows it when it was renamed or moved.
     let moves = find_moves(&gone, &lost, &walk.books, &by_path);
-    let moved: HashSet<&Path> = moves.iter().map(|(_, f, _)| f.path.as_path()).collect();
-    let moved_ids: HashSet<u64> = moves.iter().map(|(b, _, _)| b.id).collect();
-    for (b, f, replaces) in &moves {
-        let mut book = (*b).clone();
-        book.file_path = f.path.clone();
-        book.file_modified = f.modified.map(chrono::DateTime::<chrono::Local>::from);
-        send(ScanEvent::Moved { book, from: b.file_path.clone(), replaces: *replaces });
+    let moved: HashSet<&Path> = moves.iter().map(|(_, f)| f.path.as_path()).collect();
+    let moved_ids: HashSet<u64> = moves.iter().map(|(b, _)| b.id).collect();
+    for (b, f) in &moves {
+        send(ScanEvent::Moved {
+            id: b.id,
+            from: b.file_path.clone(),
+            to: f.path.clone(),
+            modified: f.modified.map(DateTime::<Local>::from),
+        });
     }
-    // Only new files and files whose size or date changed are read.
-    // (book, replace the library values, new book)
-    let mut work: Vec<(Book, bool, bool)> = Vec::new();
+    // Only new files and files whose size or date changed are read: a new
+    // book (no id), or the change of a known one.
+    let mut work: Vec<Book> = Vec::new();
     for f in walk.books.iter().filter(|f| !moved.contains(f.path.as_path())) {
-        let modified = f.modified.map(chrono::DateTime::<chrono::Local>::from);
+        let modified = f.modified.map(DateTime::<Local>::from);
         match by_path.get(f.path.as_path()) {
             Some(existing) if f.size == existing.file_size && modified == existing.file_modified => {}
-            Some(existing) => {
-                let mut b = (*existing).clone();
-                b.file_size = f.size;
-                b.file_modified = modified;
-                let force = !b.info_dirty;
-                work.push((b, force, false));
-            }
-            None => {
-                let b = Book {
-                    file_path: f.path.clone(),
-                    file_size: f.size,
-                    file_modified: modified,
-                    file_created: f.created.map(chrono::DateTime::<chrono::Local>::from),
-                    ..Default::default()
-                };
-                work.push((b, true, true));
-            }
+            Some(existing) => work.push(Book {
+                id: existing.id,
+                file_path: f.path.clone(),
+                file_size: f.size,
+                file_modified: modified,
+                ..Default::default()
+            }),
+            None => work.push(Book {
+                file_path: f.path.clone(),
+                file_size: f.size,
+                file_modified: modified,
+                file_created: f.created.map(DateTime::<Local>::from),
+                ..Default::default()
+            }),
         }
     }
     let total = work.len();
     send(ScanEvent::Progress { done: 0, total, current: t!("{0} file(s) found", walk.books.len()) });
 
-    enum Done {
-        Ok(Book, bool),
-        Err(Book, bool, String),
-    }
     let next = AtomicUsize::new(0);
     let work_ref = &work;
-    let (tx, rx) = mpsc::channel::<Done>();
+    let (tx, rx) = mpsc::channel::<(Book, Result<archive::BookContent, String>)>();
     std::thread::scope(|scope| {
         for _ in 0..threads.max(1).min(total.max(1)) {
             let tx = tx.clone();
@@ -565,15 +592,10 @@ pub fn scan(
                     if i >= work_ref.len() || cancelled() {
                         return;
                     }
-                    let (mut b, force, is_new) = work_ref[i].clone();
-                    let msg = match load_content(&mut b, force, Some(xml)) {
-                        Ok(()) => Done::Ok(b, is_new),
-                        Err(e) => {
-                            let err = t!("{0}: {1}", b.file_path.display(), format!("{e:#}"));
-                            Done::Err(b, is_new, err)
-                        }
-                    };
-                    if tx.send(msg).is_err() {
+                    let b = work_ref[i].clone();
+                    let content = archive::read_content_with(&b.file_path, Some(xml))
+                        .map_err(|e| t!("{0}: {1}", b.file_path.display(), format!("{e:#}")));
+                    if tx.send((b, content)).is_err() {
                         return;
                     }
                 }
@@ -582,15 +604,9 @@ pub fn scan(
         drop(tx);
         let mut done = 0;
         let mut last = Instant::now();
-        for msg in rx {
+        for (mut b, content) in rx {
             done += 1;
-            let (b, is_new) = match msg {
-                Done::Ok(b, n) => (b, n),
-                Done::Err(b, n, e) => {
-                    send(ScanEvent::Error(e));
-                    (b, n)
-                }
-            };
+            let content = content.map_err(|e| send(ScanEvent::Error(e))).ok();
             if last.elapsed().as_millis() >= 100 || done == total {
                 last = Instant::now();
                 send(ScanEvent::Progress {
@@ -599,14 +615,27 @@ pub fn scan(
                     current: b.file_path.display().to_string(),
                 });
             }
-            send(if is_new { ScanEvent::Added(b) } else { ScanEvent::Updated(b) });
+            // Library ids start at 1: a book without one is new.
+            if b.id == 0 {
+                if let Some(c) = content {
+                    apply_content(&mut b, c, true);
+                }
+                send(ScanEvent::Added(Box::new(b)));
+            } else {
+                let change = FileChange { id: b.id, path: b.file_path, size: b.file_size, modified: b.file_modified, content };
+                send(ScanEvent::Updated(Box::new(change)));
+            }
         }
     });
     if cancelled() {
         send(ScanEvent::Finished { missing: Vec::new(), cancelled: true });
         return;
     }
-    let missing = gone.iter().map(|b| b.id).filter(|id| !moved_ids.contains(id)).collect();
+    let missing = gone
+        .iter()
+        .filter(|b| !moved_ids.contains(&b.id))
+        .map(|b| (b.id, b.file_path.clone()))
+        .collect();
     send(ScanEvent::Finished { missing, cancelled: false });
 }
 
@@ -658,15 +687,15 @@ fn same_file(book: &Book, f: &FoundFile) -> bool {
 
 /// Pairs the books whose file is gone (`gone`, then `lost`) with the files
 /// they became: a new file, or a file already known under the same name (a
-/// book added again by an earlier scan, which the moved book replaces). Only
-/// unambiguous pairs are kept; between several candidates, the one with the
-/// same file name wins.
+/// book added again by an earlier scan, which the moved book replaces in the
+/// library). Only unambiguous pairs are kept; between several candidates,
+/// the one with the same file name wins.
 fn find_moves<'a, 'f>(
     gone: &[&'a Book],
     lost: &[&'a Book],
     files: &'f [FoundFile],
     by_path: &HashMap<&Path, &Book>,
-) -> Vec<(&'a Book, &'f FoundFile, Option<u64>)> {
+) -> Vec<(&'a Book, &'f FoundFile)> {
     let candidates: Vec<&Book> = gone.iter().chain(lost).copied().collect();
     if candidates.is_empty() {
         return Vec::new();
@@ -676,33 +705,33 @@ fn find_moves<'a, 'f>(
         by_size.entry(b.file_size).or_default().push(b);
     }
     let gone_ids: HashSet<u64> = candidates.iter().map(|b| b.id).collect();
-    // Book id → (file, book it replaces) proposed for it, None when ambiguous.
-    let mut proposals: HashMap<u64, Option<(&FoundFile, Option<u64>)>> = HashMap::new();
+    // Book id → file proposed for it, None when ambiguous.
+    let mut proposals: HashMap<u64, Option<&FoundFile>> = HashMap::new();
     for f in files {
-        let replaces = match by_path.get(f.path.as_path()) {
-            None => None,
+        let known = match by_path.get(f.path.as_path()) {
+            None => false,
             // A known file can only be the moved one when it did not change
             // since, and was not moved itself.
-            Some(k) if !gone_ids.contains(&k.id) && same_file(k, f) => Some(k.id),
+            Some(k) if !gone_ids.contains(&k.id) && same_file(k, f) => true,
             Some(_) => continue,
         };
         let Some(books) = by_size.get(&f.size) else { continue };
         let same_name = |b: &&&Book| b.file_path.file_name() == f.path.file_name();
         let mut matches: Vec<&&Book> = books.iter().filter(|b| same_file(b, f)).collect();
-        if matches.len() > 1 || replaces.is_some() {
+        if matches.len() > 1 || known {
             matches.retain(same_name);
         }
         if let [b] = matches[..] {
             proposals
                 .entry(b.id)
                 .and_modify(|p| *p = None)
-                .or_insert(Some((f, replaces)));
+                .or_insert(Some(f));
         }
     }
     candidates
         .into_iter()
         .filter_map(|b| match proposals.get(&b.id) {
-            Some(Some((f, replaces))) => Some((b, *f, *replaces)),
+            Some(Some(f)) => Some((b, *f)),
             _ => None,
         })
         .collect()
@@ -798,25 +827,17 @@ mod tests {
             Book { id: 2, file_path: gone.join("kept.cbz"), ..Default::default() },
             Book { id: 3, file_path: empty.join("kept.cbz"), ..Default::default() },
         ];
-        let mut missing = None;
-        scan(vec![here, empty, gone], known, 2, || false, |ev| {
-            if let ScanEvent::Finished { missing: m, .. } = ev {
-                missing = Some(m);
-            }
-        });
-        assert_eq!(missing, Some(vec![1]));
+        let (_, _, missing) = scan_moves(vec![here, empty, gone], known);
+        assert_eq!(missing, vec![1]);
     }
 
-    /// A book moved by a scan: (id, new path, book replaced).
-    type Moved = (u64, PathBuf, Option<u64>);
-
-    /// Runs a scan; returns (moved, added, missing).
-    fn scan_moves(folders: Vec<PathBuf>, known: Vec<Book>) -> (Vec<Moved>, Vec<PathBuf>, Vec<u64>) {
+    /// Runs a scan; returns (moved: (id, new path), added, missing).
+    fn scan_moves(folders: Vec<PathBuf>, known: Vec<Book>) -> (Vec<(u64, PathBuf)>, Vec<PathBuf>, Vec<u64>) {
         let (mut moved, mut added, mut missing) = (Vec::new(), Vec::new(), Vec::new());
         scan(folders, known, 2, || false, |ev| match ev {
-            ScanEvent::Moved { book, replaces, .. } => moved.push((book.id, book.file_path, replaces)),
+            ScanEvent::Moved { id, to, .. } => moved.push((id, to)),
             ScanEvent::Added(b) => added.push(b.file_path),
-            ScanEvent::Finished { missing: m, .. } => missing = m,
+            ScanEvent::Finished { missing: m, .. } => missing = m.into_iter().map(|(id, _)| id).collect(),
             _ => {}
         });
         moved.sort();
@@ -858,9 +879,9 @@ mod tests {
         assert_eq!(
             moved,
             vec![
-                (1, bd.join("renamed.cbz"), None),
-                (2, manga.join("moved.cbz"), None),
-                (3, bd.join("Série/out.cbz"), None),
+                (1, bd.join("renamed.cbz")),
+                (2, manga.join("moved.cbz")),
+                (3, bd.join("Série/out.cbz")),
             ]
         );
         assert!(added.is_empty());
@@ -879,7 +900,7 @@ mod tests {
             known(2, &file, &file),
         ];
         let (moved, added, missing) = scan_moves(vec![bd], books);
-        assert_eq!(moved, vec![(1, file, Some(2))]);
+        assert_eq!(moved, vec![(1, file)]);
         assert!(added.is_empty());
         assert!(missing.is_empty());
     }
@@ -897,6 +918,22 @@ mod tests {
         assert!(moved.is_empty());
         assert_eq!(added, vec![bd.join("a.cbz"), bd.join("b.cbz")]);
         assert_eq!(missing, vec![1, 2]);
+    }
+
+    #[test]
+    fn file_change_applies_only_to_the_book_still_at_that_path() {
+        let content = || archive::BookContent { page_count: 12, info: Some(crate::model::ComicInfo { series: "Lu".into(), ..Default::default() }) };
+        let change = |path: &str| FileChange { id: 1, path: path.into(), size: 9, modified: None, content: Some(content()) };
+        let mut b = Book { id: 1, file_path: "/b/x.cbz".into(), ..Default::default() };
+        b.info.title = "Saisi".into();
+        // Moved by another operation meanwhile: left alone.
+        assert!(!change("/b/old.cbz").apply(&mut b, true));
+        assert_eq!(b.file_size, 0);
+        // Not forced: only the empty values are filled.
+        assert!(change("/b/x.cbz").apply(&mut b, false));
+        assert_eq!((b.file_size, b.info.page_count, b.info.series.as_str(), b.info.title.as_str()), (9, 12, "Lu", "Saisi"));
+        assert!(change("/b/x.cbz").apply(&mut b, true));
+        assert_eq!(b.info.title, "");
     }
 
     #[test]

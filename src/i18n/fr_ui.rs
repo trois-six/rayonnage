@@ -51,8 +51,8 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("No book selected", "Aucun livre sélectionné"),
     ("Select at least one book in the list.", "Sélectionnez au moins un livre dans la liste."),
     // Background jobs
-    ("Operation in progress", "Opération en cours"),
-    ("Wait for the current operation to finish.", "Attendez la fin de l'opération en cours."),
+    ("{0} (waiting)", "{0} (en attente)"),
+    ("A scan is already in progress.", "Un scan est déjà en cours."),
     ("■ {0}: cancelled after {1} s", "■ {0} : annulé après {1} s"),
     ("■ {0}: finished in {1} s", "■ {0} : terminé en {1} s"),
     (" — {0} error(s), see the log (Ctrl+J)", " — {0} erreur(s), voir le journal (Ctrl+J)"),

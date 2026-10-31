@@ -66,6 +66,8 @@ finds.
   the window while the scan runs, and books appear in the list as they are
   found. Every book added and every error is written in the
   [message log](interface.md#3-message-log).
+- The other operations (Bedetheque, conversion, organization…) can be used
+  during the scan ([Interface §1](interface.md#1-overview)).
 - A Cancel button stops the scan. Closing the window during a scan asks for
   a confirmation, then stops it; the books already read are kept.
 

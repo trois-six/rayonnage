@@ -8,7 +8,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use super::widgets::{self, Form};
-use super::{JobCtx, State, run_job};
+use super::{JobCtx, JobKind, State, run_job};
 use crate::bedetheque::{Ambiguity, Candidate, ChoiceKind, Chooser, ScrapeOutcome, Scraper, ScraperSettings};
 use crate::model::{Book, Field};
 
@@ -285,6 +285,8 @@ fn run_scrape_job(state: &State, title: &str, items: Vec<(Book, Option<String>)>
     let debug_log = settings.debug_log;
     run_job(
         state,
+        JobKind::Scrape,
+        Vec::new(),
         title,
         move |ctx| {
             let mut res = JobResult {
@@ -322,9 +324,8 @@ fn run_scrape_job(state: &State, title: &str, items: Vec<(Book, Option<String>)>
                 };
                 match outcome {
                     Ok(ScrapeOutcome::Updated(out)) => {
-                        let b = apply_changes(&book, &input, &out);
-                        res.updated.push(b.id);
-                        ctx.ui(move |st| update_book_live(st, b));
+                        res.updated.push(book.id);
+                        ctx.ui(move |st| update_book_live(st, book.id, &input, &out));
                     }
                     Ok(ScrapeOutcome::Skipped(reason)) => res.skipped.push(t!("{0}: {1}", caption, reason)),
                     Err(e) => res.errors.push(t!("{0}: {1}", caption, format!("{e:#}"))),
@@ -399,8 +400,11 @@ fn run_scrape_job(state: &State, title: &str, items: Vec<(Book, Option<String>)>
 
 /// Updates a book in the list during processing (automatic file writing is
 /// done at the end of processing).
-fn update_book_live(st: &State, b: Book) {
-    st.update_books(vec![b], true);
+fn update_book_live(st: &State, id: u64, input: &Book, out: &Book) {
+    // Applied to the book as it is now: other operations may have changed it
+    // since.
+    let Some(b) = st.library.borrow().get(id).map(|real| apply_changes(real, input, out)) else { return };
+    st.replace_books(vec![b], true, false);
 }
 
 /// Copies onto the real book the fields changed by the scraper (which was

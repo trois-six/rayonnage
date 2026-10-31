@@ -90,7 +90,10 @@ Locations are listed in [Quickstart §4](quickstart.md#4-where-the-data-lives).
 
 ## 5. Background Jobs
 
-Every long operation runs through `run_job` (`ui/mod.rs`):
+Every long operation runs through `run_job` (`ui/jobs.rs`), with a kind and
+the books whose files it changes. Operations of different kinds run at the
+same time; one waits for those asked before it of the same kind, or that
+change the files of some of the same books.
 
 - the work runs in a thread and talks to the GTK thread through an
   `async_channel`: progress (`progress`, `pulse`), log lines (`log`,
@@ -99,7 +102,12 @@ Every long operation runs through `run_job` (`ui/mod.rs`):
 - the job checks `cancelled()` between items; Cancel and closing the window
   set it;
 - the result is handed back to the GTK thread, which updates the library and
-  the list.
+  the list. Since other operations may have changed the same books in the
+  meantime, results are applied to the books as they are then
+  (`AppState::edit_books`), field by field, and only while the book still has
+  the file the operation worked on; a scan applies its changes the same way
+  (`library::FileChange`). A book given the file of another book replaces it:
+  the library holds one book per file.
 
 The scan uses its own pool of threads (Settings → Library → Parallel reads)
 for the folder walk and the book reads.

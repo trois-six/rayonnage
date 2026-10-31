@@ -17,8 +17,13 @@ generated: { by: claude-code/claude-opus-5-5, at: 2026-10-29T20:30:00Z }
 
 Rayonnage is a GTK 4 desktop application with a single main window. Long
 operations (scan, update, conversion, Bedetheque, organization) run in the
-background: the window stays responsive, a progress bar and a Cancel button
-appear at the bottom right, and only one such operation runs at a time.
+background: the window stays responsive, and each operation has its own line
+at the bottom right, with its progress and a Cancel button. As in ComicRack,
+operations of different kinds run at the same time: a Bedetheque search or a
+conversion during a scan, for example. Two operations of the same kind, or
+two that change the files of the same books (update, conversion,
+organization, pack split), run one after the other: the second one is shown
+"(waiting)" until its turn, and Cancel removes it from the queue.
 
 ## 2. The main window
 

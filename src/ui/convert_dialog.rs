@@ -7,7 +7,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use super::widgets::{self, Form};
-use super::{State, refresh_sidebar, run_job};
+use super::{JobKind, State, refresh_sidebar, run_job};
 use crate::archive::OutputFormat;
 use crate::convert::{DoublePages, ExportSettings, Naming, PageFormat, PageResize, Target, export};
 use crate::i18n::tr;
@@ -398,10 +398,13 @@ fn run_export_books(state: &State, settings: ExportSettings, books: Vec<Book>) {
     }
     let ask = (settings.target == Target::ReplaceSource || settings.delete_original) && state.settings.borrow().confirm_convert;
     let st = state.clone();
+    let ids: Vec<u64> = books.iter().map(|b| b.id).collect();
     let go = move || {
         let s = settings.clone();
         run_job(
             &st,
+            JobKind::Convert,
+            ids.clone(),
             t!("Converting…"),
             move |ctx| {
                 let groups: Vec<Vec<Book>> = if s.combine { vec![books] } else { books.into_iter().map(|b| vec![b]).collect() };
