@@ -55,6 +55,9 @@ finds.
   may only be unmounted.
 - Folders are listed and books are read in parallel, by the number of
   workers set in the settings (§2).
+- The books of the folders changed most recently are read first, so that
+  the books just added show up first in the list. A file copied keeps its
+  date, but the folder it is copied into gets a new one.
 - Scanning is designed for network drives (sshfs, SMB, NFS), where each read
   waits for the network:
   - a CBZ is read with a single small access at the end of the file: the

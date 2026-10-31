@@ -370,14 +370,14 @@ pub struct WalkResult {
     pub books: Vec<FoundFile>,
     /// XML files (possible ComicInfo sidecars).
     pub xml: HashSet<PathBuf>,
-    /// Folders successfully listed.
-    pub listed: HashSet<PathBuf>,
+    /// Folders successfully listed, with their modification date.
+    pub listed: HashMap<PathBuf, Option<SystemTime>>,
 }
 
 enum WalkMsg {
     Book(FoundFile),
     Xml(PathBuf),
-    Listed(PathBuf),
+    Listed(PathBuf, Option<SystemTime>),
     Error(String),
 }
 
@@ -436,7 +436,9 @@ pub fn find_book_files(
                     let mut subdirs = Vec::new();
                     match std::fs::read_dir(&dir) {
                         Ok(entries) => {
-                            let _ = tx.send(WalkMsg::Listed(dir.clone()));
+                            // Changed when a file is added, renamed or removed.
+                            let modified = std::fs::metadata(&dir).and_then(|m| m.modified()).ok();
+                            let _ = tx.send(WalkMsg::Listed(dir.clone(), modified));
                             for e in entries.flatten() {
                                 let name = e.file_name();
                                 if name.to_string_lossy().starts_with('.') {
@@ -504,9 +506,9 @@ pub fn find_book_files(
                 WalkMsg::Xml(p) => {
                     result.xml.insert(p);
                 }
-                WalkMsg::Listed(d) => {
+                WalkMsg::Listed(d, modified) => {
                     current = d.display().to_string();
-                    result.listed.insert(d);
+                    result.listed.insert(d, modified);
                 }
                 WalkMsg::Error(e) => send(ScanEvent::Error(e)),
             }
@@ -576,6 +578,13 @@ pub fn scan(
             }),
         }
     }
+    // The folders changed most recently are read first, so that the books
+    // just added show up first. A file copied keeps its date, but its folder
+    // gets a new one.
+    work.sort_by_cached_key(|b| {
+        let folder = b.file_path.parent().and_then(|d| walk.listed.get(d).copied().flatten());
+        std::cmp::Reverse((folder, b.file_modified))
+    });
     let total = work.len();
     send(ScanEvent::Progress { done: 0, total, current: t!("{0} file(s) found", walk.books.len()) });
 
@@ -666,7 +675,7 @@ fn gone_books<'a>(
     for b in known.iter().filter(|b| !found.contains(b.file_path.as_path())) {
         let Some(dir) = b.file_path.parent() else { continue };
         if folders.iter().any(|f| b.file_path.starts_with(f)) {
-            if available.iter().any(|f| b.file_path.starts_with(f)) && (walk.listed.contains(dir) || !dir.exists()) {
+            if available.iter().any(|f| b.file_path.starts_with(f)) && (walk.listed.contains_key(dir) || !dir.exists()) {
                 gone.push(b);
             }
         } else if !b.file_path.exists() {
@@ -918,6 +927,29 @@ mod tests {
         assert!(moved.is_empty());
         assert_eq!(added, vec![bd.join("a.cbz"), bd.join("b.cbz")]);
         assert_eq!(missing, vec![1, 2]);
+    }
+
+    #[test]
+    fn scan_reads_the_folders_changed_last_first() {
+        let dir = tempfile::tempdir().unwrap();
+        let (old, new) = (dir.path().join("a old"), dir.path().join("z new"));
+        std::fs::create_dir(&old).unwrap();
+        std::fs::create_dir(&new).unwrap();
+        let pause = || std::thread::sleep(std::time::Duration::from_millis(50));
+        // The file of "z new" is the oldest, but its folder changed last (and
+        // comes last by name).
+        std::fs::write(new.join("a.cbz"), b"").unwrap();
+        pause();
+        std::fs::write(old.join("b.cbz"), b"").unwrap();
+        pause();
+        std::fs::rename(new.join("a.cbz"), new.join("c.cbz")).unwrap();
+        let mut added = Vec::new();
+        scan(vec![dir.path().to_path_buf()], Vec::new(), 1, || false, |ev| {
+            if let ScanEvent::Added(b) = ev {
+                added.push(b.file_path);
+            }
+        });
+        assert_eq!(added, vec![new.join("c.cbz"), old.join("b.cbz")]);
     }
 
     #[test]
