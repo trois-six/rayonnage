@@ -317,6 +317,9 @@ pub enum ScanEvent {
     Added(Book),
     /// An already known book whose file changed on disk.
     Updated(Book),
+    /// A known book whose file was renamed or moved: the book with its new
+    /// path, and the book already known at that path, that it replaces.
+    Moved { book: Book, from: PathBuf, replaces: Option<u64> },
     Error(String),
     Finished { missing: Vec<u64>, cancelled: bool },
 }
@@ -504,10 +507,22 @@ pub fn scan(
         return;
     }
     let by_path: HashMap<&Path, &Book> = known.iter().map(|b| (b.file_path.as_path(), b)).collect();
+    let found: HashSet<&Path> = walk.books.iter().map(|f| f.path.as_path()).collect();
+    let (gone, lost) = gone_books(&folders, &walk, &known, &found);
+    // A book whose file is gone follows it when it was renamed or moved.
+    let moves = find_moves(&gone, &lost, &walk.books, &by_path);
+    let moved: HashSet<&Path> = moves.iter().map(|(_, f, _)| f.path.as_path()).collect();
+    let moved_ids: HashSet<u64> = moves.iter().map(|(b, _, _)| b.id).collect();
+    for (b, f, replaces) in &moves {
+        let mut book = (*b).clone();
+        book.file_path = f.path.clone();
+        book.file_modified = f.modified.map(chrono::DateTime::<chrono::Local>::from);
+        send(ScanEvent::Moved { book, from: b.file_path.clone(), replaces: *replaces });
+    }
     // Only new files and files whose size or date changed are read.
     // (book, replace the library values, new book)
     let mut work: Vec<(Book, bool, bool)> = Vec::new();
-    for f in &walk.books {
+    for f in walk.books.iter().filter(|f| !moved.contains(f.path.as_path())) {
         let modified = f.modified.map(chrono::DateTime::<chrono::Local>::from);
         match by_path.get(f.path.as_path()) {
             Some(existing) if f.size == existing.file_size && modified == existing.file_modified => {}
@@ -591,27 +606,106 @@ pub fn scan(
         send(ScanEvent::Finished { missing: Vec::new(), cancelled: true });
         return;
     }
-    // Missing: in a folder that was listed (or that disappeared), and not found.
-    // A library folder that cannot be found (moved, drive not mounted), or
-    // where no book file is found at all (empty mount point), loses none of
-    // its books.
-    let found: HashSet<&Path> = walk.books.iter().map(|f| f.path.as_path()).collect();
+    let missing = gone.iter().map(|b| b.id).filter(|id| !moved_ids.contains(id)).collect();
+    send(ScanEvent::Finished { missing, cancelled: false });
+}
+
+/// The known books whose file is gone, as (gone, lost): the gone books are
+/// removed from the library unless their file is found moved, the lost ones
+/// are only looked for.
+///
+/// In a library folder, a book is gone when its folder was listed without
+/// it, or when its folder disappeared. A library folder that cannot be found
+/// (moved, drive not mounted), or where no book file is found at all (empty
+/// mount point), loses none of its books.
+///
+/// Outside the library folders (a library folder removed from the settings,
+/// a book filed or converted elsewhere), a book is gone when its folder is
+/// there without it. When its folder is not there either, the drive may only
+/// be unmounted: the book is kept, unless its file is found moved.
+fn gone_books<'a>(
+    folders: &[PathBuf],
+    walk: &WalkResult,
+    known: &'a [Book],
+    found: &HashSet<&Path>,
+) -> (Vec<&'a Book>, Vec<&'a Book>) {
     let available: Vec<&PathBuf> = folders
         .iter()
         .filter(|f| f.is_dir() && walk.books.iter().any(|b| b.path.starts_with(f)))
         .collect();
-    let missing = known
-        .iter()
-        .filter(|b| available.iter().any(|f| b.file_path.starts_with(f)))
-        .filter(|b| !found.contains(b.file_path.as_path()))
-        .filter(|b| match b.file_path.parent() {
-            Some(dir) if walk.listed.contains(dir) => true,
-            Some(dir) => !dir.exists(),
-            None => false,
+    let (mut gone, mut lost) = (Vec::new(), Vec::new());
+    for b in known.iter().filter(|b| !found.contains(b.file_path.as_path())) {
+        let Some(dir) = b.file_path.parent() else { continue };
+        if folders.iter().any(|f| b.file_path.starts_with(f)) {
+            if available.iter().any(|f| b.file_path.starts_with(f)) && (walk.listed.contains(dir) || !dir.exists()) {
+                gone.push(b);
+            }
+        } else if !b.file_path.exists() {
+            if dir.is_dir() { gone.push(b) } else { lost.push(b) }
+        }
+    }
+    (gone, lost)
+}
+
+/// Whether a book file found by the scan is the file of `book`, renamed or
+/// moved: same size and same modification date. A copy to another drive
+/// may keep the date only to the second (FAT: two seconds).
+fn same_file(book: &Book, f: &FoundFile) -> bool {
+    let (Some(a), Some(b)) = (book.file_modified, f.modified) else { return false };
+    let b = chrono::DateTime::<chrono::Local>::from(b);
+    book.file_size > 0 && book.file_size == f.size && (a - b).num_milliseconds().abs() <= 2000
+}
+
+/// Pairs the books whose file is gone (`gone`, then `lost`) with the files
+/// they became: a new file, or a file already known under the same name (a
+/// book added again by an earlier scan, which the moved book replaces). Only
+/// unambiguous pairs are kept; between several candidates, the one with the
+/// same file name wins.
+fn find_moves<'a, 'f>(
+    gone: &[&'a Book],
+    lost: &[&'a Book],
+    files: &'f [FoundFile],
+    by_path: &HashMap<&Path, &Book>,
+) -> Vec<(&'a Book, &'f FoundFile, Option<u64>)> {
+    let candidates: Vec<&Book> = gone.iter().chain(lost).copied().collect();
+    if candidates.is_empty() {
+        return Vec::new();
+    }
+    let mut by_size: HashMap<u64, Vec<&Book>> = HashMap::new();
+    for b in &candidates {
+        by_size.entry(b.file_size).or_default().push(b);
+    }
+    let gone_ids: HashSet<u64> = candidates.iter().map(|b| b.id).collect();
+    // Book id → (file, book it replaces) proposed for it, None when ambiguous.
+    let mut proposals: HashMap<u64, Option<(&FoundFile, Option<u64>)>> = HashMap::new();
+    for f in files {
+        let replaces = match by_path.get(f.path.as_path()) {
+            None => None,
+            // A known file can only be the moved one when it did not change
+            // since, and was not moved itself.
+            Some(k) if !gone_ids.contains(&k.id) && same_file(k, f) => Some(k.id),
+            Some(_) => continue,
+        };
+        let Some(books) = by_size.get(&f.size) else { continue };
+        let same_name = |b: &&&Book| b.file_path.file_name() == f.path.file_name();
+        let mut matches: Vec<&&Book> = books.iter().filter(|b| same_file(b, f)).collect();
+        if matches.len() > 1 || replaces.is_some() {
+            matches.retain(same_name);
+        }
+        if let [b] = matches[..] {
+            proposals
+                .entry(b.id)
+                .and_modify(|p| *p = None)
+                .or_insert(Some((f, replaces)));
+        }
+    }
+    candidates
+        .into_iter()
+        .filter_map(|b| match proposals.get(&b.id) {
+            Some(Some((f, replaces))) => Some((b, *f, *replaces)),
+            _ => None,
         })
-        .map(|b| b.id)
-        .collect();
-    send(ScanEvent::Finished { missing, cancelled: false });
+        .collect()
 }
 
 /// Cover thumbnail (PNG bytes), cached on disk by path, size and mtime.
@@ -711,6 +805,116 @@ mod tests {
             }
         });
         assert_eq!(missing, Some(vec![1]));
+    }
+
+    /// A book moved by a scan: (id, new path, book replaced).
+    type Moved = (u64, PathBuf, Option<u64>);
+
+    /// Runs a scan; returns (moved, added, missing).
+    fn scan_moves(folders: Vec<PathBuf>, known: Vec<Book>) -> (Vec<Moved>, Vec<PathBuf>, Vec<u64>) {
+        let (mut moved, mut added, mut missing) = (Vec::new(), Vec::new(), Vec::new());
+        scan(folders, known, 2, || false, |ev| match ev {
+            ScanEvent::Moved { book, replaces, .. } => moved.push((book.id, book.file_path, replaces)),
+            ScanEvent::Added(b) => added.push(b.file_path),
+            ScanEvent::Finished { missing: m, .. } => missing = m,
+            _ => {}
+        });
+        moved.sort();
+        added.sort();
+        (moved, added, missing)
+    }
+
+    /// A known book for a file, with the file's size and date.
+    fn known(id: u64, path: &Path, file: &Path) -> Book {
+        let md = std::fs::metadata(file).unwrap();
+        Book {
+            id,
+            file_path: path.to_path_buf(),
+            file_size: md.len(),
+            file_modified: md.modified().ok().map(chrono::DateTime::<chrono::Local>::from),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn scan_follows_renamed_and_moved_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bd, manga, old) = (dir.path().join("BDs"), dir.path().join("Mangas"), dir.path().join("old"));
+        for d in [&bd, &manga, &bd.join("Série")] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(bd.join("renamed.cbz"), b"one").unwrap();
+        std::fs::write(manga.join("moved.cbz"), b"two!").unwrap();
+        std::fs::write(bd.join("Série/out.cbz"), b"three").unwrap();
+        let books = vec![
+            // Renamed in its folder.
+            known(1, &bd.join("first.cbz"), &bd.join("renamed.cbz")),
+            // Moved from a folder deleted to another library folder.
+            known(2, &bd.join("Gone/moved.cbz"), &manga.join("moved.cbz")),
+            // Moved from a folder outside the library, deleted since.
+            known(3, &old.join("out.cbz"), &bd.join("Série/out.cbz")),
+        ];
+        let (moved, added, missing) = scan_moves(vec![bd.clone(), manga.clone()], books);
+        assert_eq!(
+            moved,
+            vec![
+                (1, bd.join("renamed.cbz"), None),
+                (2, manga.join("moved.cbz"), None),
+                (3, bd.join("Série/out.cbz"), None),
+            ]
+        );
+        assert!(added.is_empty());
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn scan_merges_a_moved_book_added_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let bd = dir.path().join("BDs");
+        std::fs::create_dir(&bd).unwrap();
+        let file = bd.join("Rugbymen #22.cbz");
+        std::fs::write(&file, b"book").unwrap();
+        let books = vec![
+            known(1, &dir.path().join("temp/BDs/Rugbymen #22.cbz"), &file),
+            known(2, &file, &file),
+        ];
+        let (moved, added, missing) = scan_moves(vec![bd], books);
+        assert_eq!(moved, vec![(1, file, Some(2))]);
+        assert!(added.is_empty());
+        assert!(missing.is_empty());
+    }
+
+    #[test]
+    fn scan_does_not_guess_between_identical_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let bd = dir.path().join("BDs");
+        std::fs::create_dir(&bd).unwrap();
+        std::fs::write(bd.join("a.cbz"), b"same").unwrap();
+        std::fs::write(bd.join("b.cbz"), b"same").unwrap();
+        let books = vec![known(1, &bd.join("x.cbz"), &bd.join("a.cbz")), known(2, &bd.join("y.cbz"), &bd.join("b.cbz"))];
+        let (moved, added, mut missing) = scan_moves(vec![bd.clone()], books);
+        missing.sort();
+        assert!(moved.is_empty());
+        assert_eq!(added, vec![bd.join("a.cbz"), bd.join("b.cbz")]);
+        assert_eq!(missing, vec![1, 2]);
+    }
+
+    #[test]
+    fn scan_drops_the_deleted_books_outside_the_library_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let (bd, other) = (dir.path().join("BDs"), dir.path().join("other"));
+        std::fs::create_dir(&bd).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        std::fs::write(bd.join("x.cbz"), b"x").unwrap();
+        std::fs::write(other.join("kept.cbz"), b"k").unwrap();
+        let books = vec![
+            Book { id: 1, file_path: other.join("deleted.cbz"), ..Default::default() },
+            Book { id: 2, file_path: other.join("kept.cbz"), ..Default::default() },
+            // Its folder is not there: maybe a drive not mounted.
+            Book { id: 3, file_path: dir.path().join("unmounted/z.cbz"), ..Default::default() },
+        ];
+        let (_, _, missing) = scan_moves(vec![bd], books);
+        assert_eq!(missing, vec![1]);
     }
 }
 

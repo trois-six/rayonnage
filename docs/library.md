@@ -30,7 +30,7 @@ Settings → Library holds:
 |---|---|
 | Folders scanned for books | The list of folders the scan walks, recursively. "Add Folder…" adds one, the cross removes one, and a warning sign marks a folder not found. Changing the list offers to scan at once. |
 | Scan the folders at startup | Runs a scan each time the application starts. |
-| Remove books whose file has disappeared | During a scan, drops from the library the books whose file no longer exists. Off, they stay in the library. A library folder not found, or where the scan finds no book file at all, loses none of its books. |
+| Remove books whose file has disappeared | During a scan, drops from the library the books whose file no longer exists, and was not found renamed or moved (§3). Off, they stay in the library. A library folder not found, or where the scan finds no book file at all, loses none of its books. |
 | Parallel reads during the scan | Number of folders listed and books read at the same time, 16 by default. 16 to 32 suit network drives; 4 is enough for a local disk. |
 
 ## 3. Scanning
@@ -40,6 +40,19 @@ finds.
 
 - Only new books, and books whose size or modification date changed, are
   read; the others are kept as they are in the library.
+- A book whose file was renamed or moved outside the application, in a
+  library folder or from anywhere else, follows its file: the scan finds it
+  by its size and modification date, and only changes its path, keeping
+  everything entered for it. When several files could be the book, the one
+  with the same name is taken; when none can be told apart, the file is
+  added as a new book. A book already added again at the new path by an
+  earlier scan is replaced by the moved one.
+- A book whose file is gone is removed from the library (§2): in a library
+  folder, when its folder was read without it or no longer exists; outside
+  the library folders (a folder removed from the settings, a book filed or
+  converted elsewhere), when its folder is there without it. A book outside
+  the library folders whose folder is not there either is kept, as its drive
+  may only be unmounted.
 - Folders are listed and books are read in parallel, by the number of
   workers set in the settings (§2).
 - Scanning is designed for network drives (sshfs, SMB, NFS), where each read

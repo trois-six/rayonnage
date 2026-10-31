@@ -1251,6 +1251,12 @@ fn scan_folders(state: &State) {
                         stats.updated += 1;
                         updated.push(b);
                     }
+                    ScanEvent::Moved { book, from, replaces } => {
+                        c.log(t!("Moved: {0} → {1}", from.display(), book.file_path.display()));
+                        stats.moved += 1;
+                        stats.replaced.extend(replaces);
+                        updated.push(book);
+                    }
                     ScanEvent::Error(e) => {
                         c.error(e);
                         stats.errors += 1;
@@ -1269,6 +1275,9 @@ fn scan_folders(state: &State) {
             stats
         },
         |st, stats| {
+            // The books added again by an earlier scan at the new path of a
+            // moved book.
+            st.remove_books(&stats.replaced);
             let nm = stats.missing.len();
             if st.settings.borrow().remove_missing && !stats.missing.is_empty() {
                 for id in &stats.missing {
@@ -1283,9 +1292,9 @@ fn scan_folders(state: &State) {
             refresh_sidebar(st);
             update_status(st);
             let mut msg = if stats.cancelled {
-                t!("Scan cancelled: {0} new, {1} updated, {2} missing", stats.added, stats.updated, nm)
+                t!("Scan cancelled: {0} new, {1} updated, {2} moved, {3} missing", stats.added, stats.updated, stats.moved, nm)
             } else {
-                t!("Scan finished: {0} new, {1} updated, {2} missing", stats.added, stats.updated, nm)
+                t!("Scan finished: {0} new, {1} updated, {2} moved, {3} missing", stats.added, stats.updated, stats.moved, nm)
             };
             if stats.errors > 0 {
                 msg.push_str(&t!(", {0} error(s) — see the log (Ctrl+J)", stats.errors));
@@ -1308,8 +1317,10 @@ pub fn with_errors(mut msg: String, errors: usize) -> String {
 struct ScanStats {
     added: usize,
     updated: usize,
+    moved: usize,
     errors: usize,
     missing: Vec<u64>,
+    replaced: Vec<u64>,
     cancelled: bool,
 }
 

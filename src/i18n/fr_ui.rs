@@ -68,14 +68,15 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ),
     ("Added: {0} ({1} pages)", "Ajouté : {0} ({1} pages)"),
     ("Updated: {0}", "Mis à jour : {0}"),
+    ("Moved: {0} → {1}", "Déplacé : {0} → {1}"),
     ("Removed (file not found): {0}", "Retiré (fichier introuvable) : {0}"),
     (
-        "Scan cancelled: {0} new, {1} updated, {2} missing",
-        "Scan annulé : {0} nouveau(x), {1} mis à jour, {2} introuvable(s)",
+        "Scan cancelled: {0} new, {1} updated, {2} moved, {3} missing",
+        "Scan annulé : {0} nouveau(x), {1} mis à jour, {2} déplacé(s), {3} introuvable(s)",
     ),
     (
-        "Scan finished: {0} new, {1} updated, {2} missing",
-        "Scan terminé : {0} nouveau(x), {1} mis à jour, {2} introuvable(s)",
+        "Scan finished: {0} new, {1} updated, {2} moved, {3} missing",
+        "Scan terminé : {0} nouveau(x), {1} mis à jour, {2} déplacé(s), {3} introuvable(s)",
     ),
     (", {0} error(s) — see the log (Ctrl+J)", ", {0} erreur(s) — voir le journal (Ctrl+J)"),
     // Update / refresh / remove
