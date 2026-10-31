@@ -1,14 +1,13 @@
 //! Library database (SQLite) and folder scanning.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, mpsc};
 use std::time::{Instant, SystemTime};
 
-use chrono::{DateTime, Local};
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, Result};
+use chrono::{DateTime, Local};
 use serde::Deserialize;
 
 use crate::archive;
@@ -317,19 +316,52 @@ pub enum ScanEvent {
     Progress { done: usize, total: usize, current: String },
     /// A new book file (id not yet assigned).
     Added(Box<Book>),
-    /// An already known book whose file changed on disk.
-    Updated(Box<FileChange>),
-    /// A known book whose file was renamed or moved. A book already known at
-    /// the new path (added again by an earlier scan) is replaced by it.
-    Moved { id: u64, from: PathBuf, to: PathBuf, modified: Option<DateTime<Local>> },
+    /// A known book whose file changed, or moved.
+    Changed(BookChange),
     Error(String),
     /// `missing`: the books whose file is gone, with the path it had.
     Finished { missing: Vec<(u64, PathBuf)>, cancelled: bool },
 }
 
-/// A known book file changed on disk, read again. The scan runs while other
+/// A change of a known book found by a scan. The scan runs while other
 /// operations change the library: the change is applied to the book as it
-/// is when the scan reports it, if it still has that file.
+/// is when the scan reports it, if it still has the same file.
+pub enum BookChange {
+    /// Its file changed on disk, and was read again.
+    Updated(Box<FileChange>),
+    /// Its file was renamed or moved. A book already known at the new path
+    /// (added again by an earlier scan) is replaced by it.
+    Moved { id: u64, from: PathBuf, to: PathBuf, modified: Option<DateTime<Local>> },
+}
+
+impl BookChange {
+    pub fn id(&self) -> u64 {
+        match self {
+            BookChange::Updated(c) => c.id,
+            BookChange::Moved { id, .. } => *id,
+        }
+    }
+
+    /// Applies the change to the book, unless its file changed since. The
+    /// changes of the book not written to its file are kept: only its empty
+    /// values are filled.
+    pub fn apply(self, book: &mut Book) -> bool {
+        match self {
+            BookChange::Updated(c) => {
+                let force = !book.info_dirty;
+                c.apply(book, force)
+            }
+            BookChange::Moved { from, to, modified, .. } if book.file_path == from => {
+                book.file_path = to;
+                book.file_modified = modified;
+                true
+            }
+            BookChange::Moved { .. } => false,
+        }
+    }
+}
+
+/// A known book file changed on disk, read again.
 pub struct FileChange {
     pub id: u64,
     pub path: PathBuf,
@@ -526,6 +558,30 @@ pub fn find_book_files(
     result
 }
 
+/// A book file to read during a scan.
+enum Work {
+    /// A new book file (no library id yet).
+    New(Box<Book>),
+    /// The changed file of a known book (nothing read yet).
+    Changed(Box<FileChange>),
+}
+
+impl Work {
+    fn path(&self) -> &Path {
+        match self {
+            Work::New(b) => &b.file_path,
+            Work::Changed(c) => &c.path,
+        }
+    }
+
+    fn modified(&self) -> Option<DateTime<Local>> {
+        match self {
+            Work::New(b) => b.file_modified,
+            Work::Changed(c) => c.modified,
+        }
+    }
+}
+
 /// Scans the folders (worker thread). `known` holds the library books. New
 /// and modified files are read by `threads` threads at the same time.
 pub fn scan(
@@ -548,49 +604,51 @@ pub fn scan(
     let moved: HashSet<&Path> = moves.iter().map(|(_, f)| f.path.as_path()).collect();
     let moved_ids: HashSet<u64> = moves.iter().map(|(b, _)| b.id).collect();
     for (b, f) in &moves {
-        send(ScanEvent::Moved {
+        send(ScanEvent::Changed(BookChange::Moved {
             id: b.id,
             from: b.file_path.clone(),
             to: f.path.clone(),
             modified: f.modified.map(DateTime::<Local>::from),
-        });
+        }));
     }
-    // Only new files and files whose size or date changed are read: a new
-    // book (no id), or the change of a known one.
-    let mut work: Vec<Book> = Vec::new();
+    // Only new files and files whose size or date changed are read.
+    let mut work: Vec<Work> = Vec::new();
     for f in walk.books.iter().filter(|f| !moved.contains(f.path.as_path())) {
         let modified = f.modified.map(DateTime::<Local>::from);
         match by_path.get(f.path.as_path()) {
             Some(existing) if f.size == existing.file_size && modified == existing.file_modified => {}
-            Some(existing) => work.push(Book {
+            Some(existing) => work.push(Work::Changed(Box::new(FileChange {
                 id: existing.id,
-                file_path: f.path.clone(),
-                file_size: f.size,
-                file_modified: modified,
-                ..Default::default()
-            }),
-            None => work.push(Book {
+                path: f.path.clone(),
+                size: f.size,
+                modified,
+                content: None,
+            }))),
+            None => work.push(Work::New(Box::new(Book {
                 file_path: f.path.clone(),
                 file_size: f.size,
                 file_modified: modified,
                 file_created: f.created.map(DateTime::<Local>::from),
                 ..Default::default()
-            }),
+            }))),
         }
     }
     // The folders changed most recently are read first, so that the books
     // just added show up first. A file copied keeps its date, but its folder
     // gets a new one.
-    work.sort_by_cached_key(|b| {
-        let folder = b.file_path.parent().and_then(|d| walk.listed.get(d).copied().flatten());
-        std::cmp::Reverse((folder, b.file_modified))
+    work.sort_by_cached_key(|w| {
+        let folder = w.path().parent().and_then(|d| walk.listed.get(d).copied().flatten());
+        std::cmp::Reverse((folder, w.modified()))
     });
     let total = work.len();
     send(ScanEvent::Progress { done: 0, total, current: t!("{0} file(s) found", walk.books.len()) });
 
     let next = AtomicUsize::new(0);
-    let work_ref = &work;
-    let (tx, rx) = mpsc::channel::<(Book, Result<archive::BookContent, String>)>();
+    // Each file read is sent back as (index in `work`, what was read).
+    let (tx, rx) = mpsc::channel::<(usize, Result<archive::BookContent, String>)>();
+    let mut work: Vec<Option<Work>> = work.into_iter().map(Some).collect();
+    let paths: Vec<PathBuf> = work.iter().flatten().map(|w| w.path().to_path_buf()).collect();
+    let paths = &paths;
     std::thread::scope(|scope| {
         for _ in 0..threads.max(1).min(total.max(1)) {
             let tx = tx.clone();
@@ -598,13 +656,12 @@ pub fn scan(
             scope.spawn(move || {
                 loop {
                     let i = next.fetch_add(1, Ordering::Relaxed);
-                    if i >= work_ref.len() || cancelled() {
+                    if i >= paths.len() || cancelled() {
                         return;
                     }
-                    let b = work_ref[i].clone();
-                    let content = archive::read_content_with(&b.file_path, Some(xml))
-                        .map_err(|e| t!("{0}: {1}", b.file_path.display(), format!("{e:#}")));
-                    if tx.send((b, content)).is_err() {
+                    let content = archive::read_content_with(&paths[i], Some(xml))
+                        .map_err(|e| t!("{0}: {1}", paths[i].display(), format!("{e:#}")));
+                    if tx.send((i, content)).is_err() {
                         return;
                     }
                 }
@@ -613,26 +670,31 @@ pub fn scan(
         drop(tx);
         let mut done = 0;
         let mut last = Instant::now();
-        for (mut b, content) in rx {
+        for (i, content) in rx {
             done += 1;
-            let content = content.map_err(|e| send(ScanEvent::Error(e))).ok();
+            let content = match content {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    send(ScanEvent::Error(e));
+                    None
+                }
+            };
             if last.elapsed().as_millis() >= 100 || done == total {
                 last = Instant::now();
-                send(ScanEvent::Progress {
-                    done,
-                    total,
-                    current: b.file_path.display().to_string(),
-                });
+                send(ScanEvent::Progress { done, total, current: paths[i].display().to_string() });
             }
-            // Library ids start at 1: a book without one is new.
-            if b.id == 0 {
-                if let Some(c) = content {
-                    apply_content(&mut b, c, true);
+            match work[i].take() {
+                Some(Work::New(mut b)) => {
+                    if let Some(c) = content {
+                        apply_content(&mut b, c, true);
+                    }
+                    send(ScanEvent::Added(b));
                 }
-                send(ScanEvent::Added(Box::new(b)));
-            } else {
-                let change = FileChange { id: b.id, path: b.file_path, size: b.file_size, modified: b.file_modified, content };
-                send(ScanEvent::Updated(Box::new(change)));
+                Some(Work::Changed(mut change)) => {
+                    change.content = content;
+                    send(ScanEvent::Changed(BookChange::Updated(change)));
+                }
+                None => {}
             }
         }
     });
@@ -690,7 +752,7 @@ fn gone_books<'a>(
 /// may keep the date only to the second (FAT: two seconds).
 fn same_file(book: &Book, f: &FoundFile) -> bool {
     let (Some(a), Some(b)) = (book.file_modified, f.modified) else { return false };
-    let b = chrono::DateTime::<chrono::Local>::from(b);
+    let b = DateTime::<Local>::from(b);
     book.file_size > 0 && book.file_size == f.size && (a - b).num_milliseconds().abs() <= 2000
 }
 
@@ -725,10 +787,9 @@ fn find_moves<'a, 'f>(
             Some(_) => continue,
         };
         let Some(books) = by_size.get(&f.size) else { continue };
-        let same_name = |b: &&&Book| b.file_path.file_name() == f.path.file_name();
-        let mut matches: Vec<&&Book> = books.iter().filter(|b| same_file(b, f)).collect();
+        let mut matches: Vec<&Book> = books.iter().copied().filter(|b| same_file(b, f)).collect();
         if matches.len() > 1 || known {
-            matches.retain(same_name);
+            matches.retain(|b| b.file_path.file_name() == f.path.file_name());
         }
         if let [b] = matches[..] {
             proposals
@@ -844,7 +905,7 @@ mod tests {
     fn scan_moves(folders: Vec<PathBuf>, known: Vec<Book>) -> (Vec<(u64, PathBuf)>, Vec<PathBuf>, Vec<u64>) {
         let (mut moved, mut added, mut missing) = (Vec::new(), Vec::new(), Vec::new());
         scan(folders, known, 2, || false, |ev| match ev {
-            ScanEvent::Moved { id, to, .. } => moved.push((id, to)),
+            ScanEvent::Changed(BookChange::Moved { id, to, .. }) => moved.push((id, to)),
             ScanEvent::Added(b) => added.push(b.file_path),
             ScanEvent::Finished { missing: m, .. } => missing = m.into_iter().map(|(id, _)| id).collect(),
             _ => {}

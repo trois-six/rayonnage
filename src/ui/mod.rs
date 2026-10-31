@@ -27,7 +27,7 @@ use gtk::prelude::*;
 use gtk::{gdk, gio, glib};
 
 use crate::archive;
-use crate::library::{self, Library, ScanEvent};
+use crate::library::{self, BookChange, Library, ScanEvent};
 use crate::model::{Book, Field, default_book_cmp};
 use crate::settings::Settings;
 pub use book_object::BookObject;
@@ -41,6 +41,17 @@ enum Source {
     All,
     Modified,
     Folder(PathBuf),
+}
+
+/// How `AppState::store_books` marks the information of the books.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InfoChange {
+    /// Left as it is in the books given.
+    None,
+    /// Changed: to write into the files, now when that is automatic.
+    ToWrite,
+    /// Changed: to write into the files by the operation, at its end.
+    ToWriteLater,
 }
 
 pub struct AppState {
@@ -911,12 +922,12 @@ impl AppState {
     /// `dirty` marks their metadata as not yet written into the files, which
     /// are then updated when that is automatic.
     pub fn update_books(self: &Rc<Self>, books: Vec<Book>, dirty: bool) {
-        self.replace_books(books, dirty, dirty);
+        self.store_books(books, if dirty { InfoChange::ToWrite } else { InfoChange::None });
     }
 
-    /// Like `update_books`; `write` updates the files when that is automatic.
-    /// A book given the path of another book replaces it: one book per file.
-    fn replace_books(self: &Rc<Self>, books: Vec<Book>, dirty: bool, write: bool) {
+    /// Replaces books (matched by id) in the library and the list. A book
+    /// given the path of another book replaces it: one book per file.
+    fn store_books(self: &Rc<Self>, books: Vec<Book>, change: InfoChange) {
         if books.is_empty() {
             return;
         }
@@ -928,7 +939,7 @@ impl AppState {
         let duplicates: Vec<u64> = {
             let mut lib = self.library.borrow_mut();
             for mut b in books {
-                if dirty {
+                if change != InfoChange::None {
                     b.info_dirty = true;
                 }
                 let Some(slot) = lib.get_mut(b.id) else { continue };
@@ -951,7 +962,10 @@ impl AppState {
         self.resort();
         refresh_sidebar(self);
         update_info_panel(self);
-        if write && self.settings.borrow().auto_update_files && self.settings.borrow().allow_write_info {
+        if change == InfoChange::ToWrite
+            && self.settings.borrow().auto_update_files
+            && self.settings.borrow().allow_write_info
+        {
             write_files(self, written);
         }
     }
@@ -961,14 +975,19 @@ impl AppState {
     /// operation, which may have run while other operations changed the
     /// same books.
     pub fn edit_books(self: &Rc<Self>, ids: impl IntoIterator<Item = u64>, mut f: impl FnMut(&mut Book) -> bool) {
-        let changed: Vec<Book> = {
+        // Copied first: `f` may use the library.
+        let books: Vec<Book> = {
             let lib = self.library.borrow();
-            ids.into_iter()
-                .filter_map(|id| lib.get(id).cloned())
-                .filter_map(|mut b| f(&mut b).then_some(b))
-                .collect()
+            ids.into_iter().filter_map(|id| lib.get(id).cloned()).collect()
         };
-        self.replace_books(changed, false, false);
+        let changed = books.into_iter().filter_map(|mut b| f(&mut b).then_some(b)).collect();
+        self.store_books(changed, InfoChange::None);
+    }
+
+    /// Like `update_books` with `dirty`, for an operation that writes the
+    /// files itself at its end.
+    pub fn update_books_written_later(self: &Rc<Self>, books: Vec<Book>) {
+        self.store_books(books, InfoChange::ToWriteLater);
     }
 
     pub fn add_books(self: &Rc<Self>, books: Vec<Book>) {
@@ -986,28 +1005,10 @@ impl AppState {
     /// Adds/updates the books found by a scan (called during the scan).
     /// The changes apply to the books as they are now: other operations may
     /// have changed them since the scan began.
-    fn apply_scanned(self: &Rc<Self>, added: Vec<Book>, changes: Vec<ScanEvent>) {
-        let mut changes: std::collections::HashMap<u64, ScanEvent> = changes
-            .into_iter()
-            .filter_map(|ev| match &ev {
-                ScanEvent::Updated(c) => Some((c.id, ev)),
-                ScanEvent::Moved { id, .. } => Some((*id, ev)),
-                _ => None,
-            })
-            .collect();
-        self.edit_books(changes.keys().copied().collect::<Vec<_>>(), |b| match changes.remove(&b.id) {
-            // Unwritten changes are kept: only the empty values are filled.
-            Some(ScanEvent::Updated(c)) => {
-                let force = !b.info_dirty;
-                c.apply(b, force)
-            }
-            Some(ScanEvent::Moved { from, to, modified, .. }) if b.file_path == from => {
-                b.file_path = to;
-                b.file_modified = modified;
-                true
-            }
-            _ => false,
-        });
+    fn apply_scanned(self: &Rc<Self>, added: Vec<Book>, changes: Vec<BookChange>) {
+        let mut changes: std::collections::HashMap<u64, BookChange> = changes.into_iter().map(|c| (c.id(), c)).collect();
+        let ids: Vec<u64> = changes.keys().copied().collect();
+        self.edit_books(ids, |b| changes.remove(&b.id).is_some_and(|c| c.apply(b)));
         // A file added meanwhile by another operation is not added again.
         let known: std::collections::HashSet<PathBuf> =
             self.library.borrow().books.iter().map(|b| b.file_path.clone()).collect();
@@ -1089,7 +1090,7 @@ fn scan_folders(state: &State) {
             let mut added = Vec::new();
             let mut updated = Vec::new();
             let mut last_flush = std::time::Instant::now();
-            let flush = |added: &mut Vec<Book>, updated: &mut Vec<ScanEvent>| {
+            let flush = |added: &mut Vec<Book>, updated: &mut Vec<BookChange>| {
                 if added.is_empty() && updated.is_empty() {
                     return;
                 }
@@ -1114,15 +1115,18 @@ fn scan_folders(state: &State) {
                         stats.added += 1;
                         added.push(*b);
                     }
-                    ScanEvent::Updated(change) => {
-                        c.log(t!("Updated: {0}", change.path.display()));
-                        stats.updated += 1;
-                        updated.push(ScanEvent::Updated(change));
-                    }
-                    ScanEvent::Moved { id, from, to, modified } => {
-                        c.log(t!("Moved: {0} → {1}", from.display(), to.display()));
-                        stats.moved += 1;
-                        updated.push(ScanEvent::Moved { id, from, to, modified });
+                    ScanEvent::Changed(change) => {
+                        match &change {
+                            BookChange::Updated(c2) => {
+                                c.log(t!("Updated: {0}", c2.path.display()));
+                                stats.updated += 1;
+                            }
+                            BookChange::Moved { from, to, .. } => {
+                                c.log(t!("Moved: {0} → {1}", from.display(), to.display()));
+                                stats.moved += 1;
+                            }
+                        }
+                        updated.push(change);
                     }
                     ScanEvent::Error(e) => {
                         c.error(e);
@@ -1146,18 +1150,14 @@ fn scan_folders(state: &State) {
             if st.settings.borrow().remove_missing && !stats.missing.is_empty() {
                 // Only the books still at the path found missing: another
                 // operation may have moved them during the scan.
-                let gone: Vec<u64> = {
+                let gone: Vec<&(u64, PathBuf)> = {
                     let lib = st.library.borrow();
-                    stats
-                        .missing
-                        .iter()
-                        .filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path))
-                        .map(|(id, path)| {
-                            st.journal.info(&t!("Removed (file not found): {0}", path.display()));
-                            *id
-                        })
-                        .collect()
+                    stats.missing.iter().filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path)).collect()
                 };
+                for (_, path) in &gone {
+                    st.journal.info(&t!("Removed (file not found): {0}", path.display()));
+                }
+                let gone: Vec<u64> = gone.into_iter().map(|(id, _)| *id).collect();
                 st.remove_books(&gone);
             }
             st.save_library();
@@ -1292,10 +1292,9 @@ fn refresh(state: &State, force: bool) {
                     break;
                 }
                 ctx.progress(i, total, b.file_name());
-                let reachable = |dir: &std::path::Path| dir.is_dir();
                 if !b.file_path.exists()
-                    && (b.file_path.parent().is_some_and(reachable)
-                        || folders.iter().any(|f| b.file_path.starts_with(f) && reachable(f)))
+                    && (b.file_path.parent().is_some_and(std::path::Path::is_dir)
+                        || folders.iter().any(|f| b.file_path.starts_with(f) && f.is_dir()))
                 {
                     gone.push((b.id, b.file_path));
                     continue;
@@ -1318,16 +1317,14 @@ fn refresh(state: &State, force: bool) {
                 st.journal.info(&t!("Reread: {0}", b.file_path.display()));
             }
             // Unless another operation gave them another file meanwhile.
-            let gone: Vec<u64> = {
+            let gone: Vec<(u64, PathBuf)> = {
                 let lib = st.library.borrow();
-                gone.into_iter()
-                    .filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path))
-                    .map(|(id, path)| {
-                        st.journal.info(&t!("Removed (file not found): {0}", path.display()));
-                        id
-                    })
-                    .collect()
+                gone.into_iter().filter(|(id, path)| lib.get(*id).is_some_and(|b| &b.file_path == path)).collect()
             };
+            for (_, path) in &gone {
+                st.journal.info(&t!("Removed (file not found): {0}", path.display()));
+            }
+            let gone: Vec<u64> = gone.into_iter().map(|(id, _)| id).collect();
             for p in &skipped {
                 st.journal.info(&t!("Not reread (changes not written to the file): {0}", p));
             }

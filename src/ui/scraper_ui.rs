@@ -404,7 +404,7 @@ fn update_book_live(st: &State, id: u64, input: &Book, out: &Book) {
     // Applied to the book as it is now: other operations may have changed it
     // since.
     let Some(b) = st.library.borrow().get(id).map(|real| apply_changes(real, input, out)) else { return };
-    st.replace_books(vec![b], true, false);
+    st.update_books_written_later(vec![b]);
 }
 
 /// Copies onto the real book the fields changed by the scraper (which was
