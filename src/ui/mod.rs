@@ -9,6 +9,7 @@ mod icons;
 mod import_dialog;
 mod inline_edit;
 mod journal;
+mod missing_folders;
 mod organizer_ui;
 mod pages_editor;
 mod scraper_ui;
@@ -252,6 +253,8 @@ pub fn build_ui(app: &gtk::Application) {
         scan(&state);
     } else if state.settings.borrow().library_folders.is_empty() && state.library.borrow().books.is_empty() {
         state.set_status(t!("Welcome! Add folders to scan in the settings (Ctrl+,), then start a scan (F5)."));
+    } else {
+        missing_folders::check(&state, |_| {});
     }
 }
 
@@ -991,15 +994,14 @@ impl AppState {
             return;
         }
         self.library.borrow_mut().remove(ids);
-        let mut i = 0;
-        while i < self.store.n_items() {
-            let o = self.store.item(i).and_downcast::<BookObject>().unwrap();
-            if ids.contains(&o.id()) {
-                self.store.remove(i);
-            } else {
-                i += 1;
-            }
-        }
+        // The list is replaced at once: removing the items one by one sorts
+        // and filters the list again after each one.
+        let ids: std::collections::HashSet<u64> = ids.iter().copied().collect();
+        let kept: Vec<BookObject> = (0..self.store.n_items())
+            .filter_map(|i| self.store.item(i).and_downcast::<BookObject>())
+            .filter(|o| !ids.contains(&o.id()))
+            .collect();
+        self.store.splice(0, self.store.n_items(), &kept);
     }
 
     fn resort(&self) {
@@ -1199,6 +1201,11 @@ pub fn scan(state: &State) {
         settings_dialog::open(state);
         return;
     }
+    missing_folders::check(state, scan_folders);
+}
+
+fn scan_folders(state: &State) {
+    let folders = state.settings.borrow().library_folders.clone();
     let known = state.library.borrow().books.clone();
     let threads = state.settings.borrow().scan_threads.max(1);
     for f in &folders {

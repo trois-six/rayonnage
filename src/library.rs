@@ -231,6 +231,39 @@ impl Library {
         }
         self.reindex();
     }
+
+    /// Moves the books below `from` to the same place below `to` (a library
+    /// folder found elsewhere); returns how many moved. A book already known
+    /// at the new path is dropped: the moved one keeps what was entered in
+    /// the library.
+    pub fn relocate(&mut self, from: &Path, to: &Path) -> usize {
+        let known: HashMap<PathBuf, u64> = self.books.iter().map(|b| (b.file_path.clone(), b.id)).collect();
+        let mut moved = HashSet::new();
+        let mut duplicates = Vec::new();
+        for b in &mut self.books {
+            let Ok(rest) = b.file_path.strip_prefix(from) else { continue };
+            b.file_path = to.join(rest);
+            if let Some(&id) = known.get(&b.file_path) {
+                duplicates.push(id);
+            }
+            self.dirty.insert(b.id);
+            moved.insert(b.id);
+        }
+        duplicates.retain(|id| !moved.contains(id));
+        self.remove(&duplicates);
+        moved.len()
+    }
+}
+
+/// Where `other` is if it moved like `from` → `to`: the end the two paths
+/// share is taken off, and the beginning that differs replaced. With
+/// `/old/BDs` → `/mnt/nas/BDs`, `/old/Mangas` gives `/mnt/nas/Mangas`.
+pub fn moved_like(from: &Path, to: &Path, other: &Path) -> Option<PathBuf> {
+    let (mut from, mut to) = (from, to);
+    while from.file_name().is_some() && from.file_name() == to.file_name() {
+        (from, to) = (from.parent()?, to.parent()?);
+    }
+    other.strip_prefix(from).ok().map(|rest| to.join(rest))
 }
 
 /// Fills a book's metadata and page count from its file. With `force`, the
@@ -559,10 +592,17 @@ pub fn scan(
         return;
     }
     // Missing: in a folder that was listed (or that disappeared), and not found.
+    // A library folder that cannot be found (moved, drive not mounted), or
+    // where no book file is found at all (empty mount point), loses none of
+    // its books.
     let found: HashSet<&Path> = walk.books.iter().map(|f| f.path.as_path()).collect();
+    let available: Vec<&PathBuf> = folders
+        .iter()
+        .filter(|f| f.is_dir() && walk.books.iter().any(|b| b.path.starts_with(f)))
+        .collect();
     let missing = known
         .iter()
-        .filter(|b| folders.iter().any(|f| b.file_path.starts_with(f)))
+        .filter(|b| available.iter().any(|f| b.file_path.starts_with(f)))
         .filter(|b| !found.contains(b.file_path.as_path()))
         .filter(|b| match b.file_path.parent() {
             Some(dir) if walk.listed.contains(dir) => true,
@@ -627,6 +667,50 @@ mod tests {
         assert_eq!(lib.get(3).unwrap().info.title, "Titre");
         assert_eq!(lib.get(3).unwrap().info.series, "Série");
         assert_eq!(lib.next_id, 5);
+    }
+
+    #[test]
+    fn relocate_moves_the_books_and_drops_duplicates() {
+        let mut lib = Library::default();
+        let a = lib.add(Book { file_path: "/old/BDs/A/1.cbz".into(), ..Default::default() });
+        let b = lib.add(Book { file_path: "/old/BDs/2.cbz".into(), ..Default::default() });
+        let other = lib.add(Book { file_path: "/old/Mangas/3.cbz".into(), ..Default::default() });
+        let dup = lib.add(Book { file_path: "/nas/BDs/2.cbz".into(), ..Default::default() });
+        assert_eq!(lib.relocate(Path::new("/old/BDs"), Path::new("/nas/BDs")), 2);
+        assert_eq!(lib.get(a).unwrap().file_path, Path::new("/nas/BDs/A/1.cbz"));
+        assert_eq!(lib.get(b).unwrap().file_path, Path::new("/nas/BDs/2.cbz"));
+        assert_eq!(lib.get(other).unwrap().file_path, Path::new("/old/Mangas/3.cbz"));
+        assert!(lib.get(dup).is_none());
+    }
+
+    #[test]
+    fn moved_like_follows_the_first_move() {
+        let p = |s: &str| PathBuf::from(s);
+        let guess = |from, to, other| moved_like(Path::new(from), Path::new(to), Path::new(other));
+        assert_eq!(guess("/old/BDs", "/mnt/nas/BDs", "/old/Mangas"), Some(p("/mnt/nas/Mangas")));
+        assert_eq!(guess("/home/me/temp/BDs", "/media/disk/temp/BDs", "/home/me/temp/x/Comics"), Some(p("/media/disk/temp/x/Comics")));
+        assert_eq!(guess("/old/BD", "/nas/Bandes", "/old/Mangas"), None);
+    }
+
+    #[test]
+    fn scan_keeps_the_books_of_a_folder_not_found_or_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let (here, empty, gone) = (dir.path().join("here"), dir.path().join("empty"), dir.path().join("gone"));
+        std::fs::create_dir(&here).unwrap();
+        std::fs::create_dir(&empty).unwrap();
+        std::fs::write(here.join("still.cbz"), b"").unwrap();
+        let known = vec![
+            Book { id: 1, file_path: here.join("deleted.cbz"), ..Default::default() },
+            Book { id: 2, file_path: gone.join("kept.cbz"), ..Default::default() },
+            Book { id: 3, file_path: empty.join("kept.cbz"), ..Default::default() },
+        ];
+        let mut missing = None;
+        scan(vec![here, empty, gone], known, 2, || false, |ev| {
+            if let ScanEvent::Finished { missing: m, .. } = ev {
+                missing = Some(m);
+            }
+        });
+        assert_eq!(missing, Some(vec![1]));
     }
 }
 

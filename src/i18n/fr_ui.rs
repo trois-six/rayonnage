@@ -173,6 +173,23 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Scan the library folders now?", "Scanner maintenant les dossiers de la bibliothèque ?"),
     ("Scan", "Scanner"),
     ("Remove this folder", "Retirer ce dossier"),
+    ("Folder not found", "Dossier introuvable"),
+    // Library folders not found
+    ("Library folders not found", "Dossiers de la bibliothèque introuvables"),
+    (
+        "These library folders cannot be found: they may have moved, or their drive or network share is not mounted. Locate each one to update the folder and the paths of its books. Folders left as they are keep their books and are skipped by the scan.",
+        "Ces dossiers de la bibliothèque sont introuvables : ils ont peut-être été déplacés, ou leur disque ou partage réseau n'est pas monté. Indiquez l'emplacement de chacun pour mettre à jour le dossier et les chemins de ses livres. Les dossiers laissés tels quels gardent leurs livres et ne sont pas scannés.",
+    ),
+    ("Locate…", "Localiser…"),
+    ("Update", "Mettre à jour"),
+    ("Not Now", "Plus tard"),
+    ("→ {0}", "→ {0}"),
+    ("New location of {0}", "Nouvel emplacement de {0}"),
+    ("Folder moved: {0} → {1} ({2} book(s))", "Dossier déplacé : {0} → {1} ({2} livre(s))"),
+    (
+        "{0} folder(s) and {1} book(s) moved to their new location",
+        "{0} dossier(s) et {1} livre(s) déplacés vers leur nouvel emplacement",
+    ),
     // Columns
     ("Visible Columns", "Colonnes affichées"),
     (

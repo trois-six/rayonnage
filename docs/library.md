@@ -28,9 +28,9 @@ Settings → Library holds:
 
 | Setting | Effect |
 |---|---|
-| Folders scanned for books | The list of folders the scan walks, recursively. "Add Folder…" adds one, the cross removes one. Changing the list offers to scan at once. |
+| Folders scanned for books | The list of folders the scan walks, recursively. "Add Folder…" adds one, the cross removes one, and a warning sign marks a folder not found. Changing the list offers to scan at once. |
 | Scan the folders at startup | Runs a scan each time the application starts. |
-| Remove books whose file has disappeared | During a scan, drops from the library the books whose file no longer exists. Off, they stay in the library. |
+| Remove books whose file has disappeared | During a scan, drops from the library the books whose file no longer exists. Off, they stay in the library. A library folder not found, or where the scan finds no book file at all, loses none of its books. |
 | Parallel reads during the scan | Number of folders listed and books read at the same time, 16 by default. 16 to 32 suit network drives; 4 is enough for a local disk. |
 
 ## 3. Scanning
@@ -55,6 +55,21 @@ finds.
   [message log](interface.md#3-message-log).
 - A Cancel button stops the scan. Closing the window during a scan asks for
   a confirmation, then stops it; the books already read are kept.
+
+### Library folders not found
+
+At startup and before each scan, the library folders that cannot be found
+(moved, drive or network share not mounted) are listed in a dialog:
+
+- "Locate…" chooses the new place of a folder. The other folders not found
+  that moved the same way are filled in: with `/old/BDs` located in
+  `/mnt/nas/BDs`, `/old/Mangas` becomes `/mnt/nas/Mangas` if that folder
+  exists.
+- "Update" replaces the folders in the settings and moves the paths of
+  their books in the library, which keeps everything entered for them. A
+  book already in the library at its new path is replaced by the moved one.
+- "Not Now" leaves the folders as they are: the scan skips them and their
+  books stay in the library.
 
 ## 4. Formats
 

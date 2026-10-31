@@ -234,6 +234,11 @@ fn rebuild_folders(list: &gtk::ListBox, folders: &Rc<RefCell<Vec<PathBuf>>>) {
             rebuild_folders(&list2, &folders);
         });
         row.append(&l);
+        if !f.is_dir() {
+            let warn = gtk::Image::from_icon_name("dialog-warning-symbolic");
+            warn.set_tooltip_text(Some(t!("Folder not found")));
+            row.append(&warn);
+        }
         row.append(&del);
         list.append(&row);
     }
