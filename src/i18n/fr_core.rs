@@ -160,4 +160,8 @@ pub static ENTRIES: &[(&str, &str)] = &[
         "The settings could not be read ({0}). The file was kept as {1}; the default settings are used.",
         "Les paramètres n'ont pas pu être lus ({0}). Le fichier a été conservé sous {1} ; les paramètres par défaut sont utilisés.",
     ),
+    (
+        "Not a ComicInfo.xml file (root element: {0})",
+        "Pas un fichier ComicInfo.xml (élément racine : {0})",
+    ),
 ];

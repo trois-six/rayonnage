@@ -136,6 +136,22 @@ pub fn find_program(configured: &str, candidates: &[&str]) -> Option<std::path::
     None
 }
 
+/// A name usable as a file name: the characters not allowed on Windows are
+/// replaced, and the trailing dots and spaces removed.
+pub fn sanitize_file_name(name: &str) -> String {
+    let s: String = name
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | '?' | '*' | '|' | '"' | '<' | '>' => '_',
+            ':' => '-',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    s.trim().trim_end_matches('.').to_string()
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

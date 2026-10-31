@@ -58,10 +58,33 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, data)?;
-    std::fs::rename(&tmp, path)?;
-    Ok(())
+    // A name of its own for each write: two threads writing the same file
+    // (the same thumbnail) do not mix their data.
+    static WRITES: AtomicUsize = AtomicUsize::new(0);
+    let n = WRITES.fetch_add(1, Ordering::Relaxed);
+    let name = path.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
+    let r = std::fs::write(&tmp, data).and_then(|()| std::fs::rename(&tmp, path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    Ok(r?)
+}
+
+/// FNV-1a: a hash that stays the same from one Rust version to the next
+/// (the standard one may change), for names of files kept on disk.
+struct Fnv(u64);
+
+impl std::hash::Hasher for Fnv {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3);
+        }
+    }
 }
 
 /// The library: every book, kept in memory, and stored in an SQLite
@@ -524,7 +547,9 @@ pub fn find_book_files(
                                     }
                                 } else if ft.is_file() {
                                     if archive::is_book_file(&path) {
-                                        match e.metadata().or_else(|_| std::fs::metadata(&path)) {
+                                        // A link's own size and date are not the book's.
+                                        let meta = if link { std::fs::metadata(&path) } else { e.metadata() };
+                                        match meta.or_else(|_| std::fs::metadata(&path)) {
                                             Ok(m) => {
                                                 let _ = tx.send(WalkMsg::Book(FoundFile {
                                                     path,
@@ -856,7 +881,7 @@ fn find_moves<'a, 'f>(
 /// Cover thumbnail (PNG bytes), cached on disk by path, size and mtime.
 pub fn thumbnail(book: &Book, max: u32) -> Result<Vec<u8>> {
     use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
     book.file_path.hash(&mut h);
     book.file_size.hash(&mut h);
     book.file_modified.map(|d| d.timestamp()).hash(&mut h);

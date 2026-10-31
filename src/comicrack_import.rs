@@ -118,13 +118,21 @@ pub struct ComicRackConfig {
 
 /// Reads the configuration files from a folder or a ZIP archive.
 pub fn read(path: &Path) -> Result<ComicRackConfig> {
+    // Only the configuration files are read: a ComicRack folder also holds
+    // the library database, hundreds of megabytes.
+    let wanted = |name: &str| {
+        let lower = name.to_lowercase();
+        ["app.config", "losettingsx.dat", "config.xml"].iter().any(|end| lower.ends_with(end))
+    };
     let mut files: Vec<(String, String)> = Vec::new();
     if path.is_dir() {
         for e in walkdir::WalkDir::new(path).max_depth(4).into_iter().flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
             if e.file_type().is_file()
+                && wanted(&name)
                 && let Ok(s) = std::fs::read_to_string(e.path())
             {
-                files.push((e.file_name().to_string_lossy().into_owned(), s));
+                files.push((name, s));
             }
         }
     } else {
@@ -133,20 +141,23 @@ pub fn read(path: &Path) -> Result<ComicRackConfig> {
             let mut f = zip.by_index(i)?;
             let name = f.name()?.rsplit('/').next().unwrap_or("").to_string();
             let mut s = String::new();
-            if f.read_to_string(&mut s).is_ok() {
+            if wanted(&name) && f.read_to_string(&mut s).is_ok() {
                 files.push((name, s));
             }
         }
     }
     let mut cfg = ComicRackConfig::default();
+    // A file that is not valid XML (another program's config.xml) is
+    // skipped, not a reason to stop.
     for (name, content) in &files {
         let lower = name.to_lowercase();
+        let Ok(root) = parse_xml(content) else { continue };
         if lower.ends_with("app.config") {
-            cfg.scraper = Some(scraper_settings(&parse_xml(content)?));
+            cfg.scraper = Some(scraper_settings(&root));
         } else if lower.ends_with("losettingsx.dat") {
-            cfg.organizer = Some(organizer_settings(&parse_xml(content)?, &mut cfg.windows_roots));
-        } else if lower.ends_with("config.xml") {
-            comicrack_settings(&parse_xml(content)?, &mut cfg);
+            cfg.organizer = Some(organizer_settings(&root, &mut cfg.windows_roots));
+        } else {
+            comicrack_settings(&root, &mut cfg);
         }
     }
     if cfg.scraper.is_none() && cfg.organizer.is_none() && cfg.export.is_none() && cfg.scan_on_startup.is_none() {

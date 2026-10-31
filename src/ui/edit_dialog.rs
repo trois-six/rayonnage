@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use gtk::prelude::*;
-use gtk::{gdk, glib};
+use gtk::glib;
 
 use super::widgets;
 use super::{BookObject, State};
@@ -229,19 +229,9 @@ fn library_values(state: &State) -> BTreeMap<Field, BTreeSet<String>> {
         Field::BookStore, Field::BookOwner, Field::BookCondition, Field::BookCollectionStatus, Field::BookLocation,
         Field::LanguageISO, Field::AgeRating, Field::Translator, Field::Editor,
     ];
-    for b in &state.library.borrow().books {
-        for f in fields {
-            let v = f.get(b);
-            if v.is_empty() {
-                continue;
-            }
-            let set = map.entry(f).or_default();
-            if f.kind() == FieldKind::List {
-                set.extend(crate::util::split_list(&v));
-            } else {
-                set.insert(v);
-            }
-        }
+    let lib = state.library.borrow();
+    for f in fields {
+        map.insert(f, super::distinct_values(&lib.books, f));
     }
     map
 }
@@ -589,16 +579,5 @@ pub(super) fn page_type_label(key: &str) -> &'static str {
 }
 
 fn load_cover(picture: &gtk::Picture, book: Book) {
-    let (tx, rx) = async_channel::bounded(1);
-    std::thread::spawn(move || {
-        let _ = tx.send_blocking(crate::library::thumbnail(&book, 400).ok());
-    });
-    let picture = picture.downgrade();
-    glib::spawn_future_local(async move {
-        if let (Ok(Some(data)), Some(p)) = (rx.recv().await, picture.upgrade())
-            && let Ok(t) = gdk::Texture::from_bytes(&glib::Bytes::from_owned(data))
-        {
-            p.set_paintable(Some(&t));
-        }
-    });
+    super::show_cover(picture, book, || true);
 }

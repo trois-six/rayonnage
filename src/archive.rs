@@ -307,9 +307,9 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
             }
             let info = match info_name.and_then(|n| zip.index_for_name(&n)) {
                 Some(i) => {
-                    let mut s = String::new();
-                    zip.by_index(i)?.read_to_string(&mut s)?;
-                    comicinfo::parse(&s).ok()
+                    let mut data = Vec::new();
+                    zip.by_index(i)?.read_to_end(&mut data)?;
+                    comicinfo::parse_bytes(&data).ok()
                 }
                 None => None,
             };
@@ -323,7 +323,7 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
             let pages = names.iter().filter(|n| is_image_name(n)).count();
             let info = if names.iter().any(|n| is_comicinfo_name(n)) {
                 rar_read_first(path, &|n| is_comicinfo_name(n))?
-                    .and_then(|p| comicinfo::parse(&String::from_utf8_lossy(&p.data)).ok())
+                    .and_then(|p| comicinfo::parse_bytes(&p.data).ok())
             } else {
                 None
             };
@@ -344,7 +344,7 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
                 Some(n) => r
                     .read_file(n)
                     .ok()
-                    .and_then(|d| comicinfo::parse(&String::from_utf8_lossy(&d)).ok()),
+                    .and_then(|d| comicinfo::parse_bytes(&d).ok()),
                 None => None,
             };
             BookContent { page_count: pages, info }
@@ -360,9 +360,9 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
                 if is_image_name(&name) {
                     pages += 1;
                 } else if is_comicinfo_name(&name) {
-                    let mut s = String::new();
-                    e.read_to_string(&mut s)?;
-                    info = comicinfo::parse(&s).ok();
+                    let mut data = Vec::new();
+                    e.read_to_end(&mut data)?;
+                    info = comicinfo::parse_bytes(&data).ok();
                 }
             }
             BookContent { page_count: pages, info }
@@ -385,10 +385,10 @@ fn read_content_as(path: &Path, fmt: BookFormat) -> Result<BookContent> {
                 .map(|n| String::from_utf8_lossy(n).into_owned())
                 .find(|n| is_comicinfo_name(n));
             let embedded = info_name.and_then(|n| {
-                    let mut s = String::new();
-                    zip.by_name(&n).ok()?.read_to_string(&mut s).ok()?;
-                    comicinfo::parse(&s).ok()
-                });
+                let mut data = Vec::new();
+                zip.by_name(&n).ok()?.read_to_end(&mut data).ok()?;
+                comicinfo::parse_bytes(&data).ok()
+            });
             BookContent {
                 page_count: package.image_count,
                 info: Some(embedded.unwrap_or(package.info)),
@@ -443,8 +443,8 @@ fn read_sidecar(path: &Path, existing: Option<&std::collections::HashSet<PathBuf
     [PathBuf::from(with_ext), path.with_extension("xml")]
         .iter()
         .filter(|p| existing.map_or_else(|| p.is_file(), |e| e.contains(*p)))
-        .find_map(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| comicinfo::parse(&s).ok())
+        .find_map(|p| std::fs::read(p).ok())
+        .and_then(|d| comicinfo::parse_bytes(&d).ok())
 }
 
 /// Reads all the pages of a book, in reading order.
@@ -653,7 +653,7 @@ fn rar_content_single_pass(path: &Path) -> Result<Option<BookContent>> {
         let is_file = header.entry().is_file();
         archive = if is_file && is_comicinfo_name(&name) && content.info.is_none() {
             let (data, next) = header.read().map_err(|e| anyhow!("{e}"))?;
-            content.info = comicinfo::parse(&String::from_utf8_lossy(&data)).ok();
+            content.info = comicinfo::parse_bytes(&data).ok();
             next
         } else {
             if is_file && is_image_name(&name) {
@@ -1083,17 +1083,26 @@ fn write_pdf(dest: &Path, pages: &[Page]) -> Result<()> {
     let pages_id = doc.new_object_id();
     let mut kids = Vec::new();
     for p in pages {
-        let is_jpeg = p.data.starts_with(&[0xFF, 0xD8]);
-        let img = image::load_from_memory(&p.data).context(p.name.clone())?;
-        let (w, h) = (img.width(), img.height());
-        let (data, cs) = if is_jpeg && matches!(img.color(), image::ColorType::Rgb8 | image::ColorType::L8) {
-            let cs = if img.color() == image::ColorType::L8 { "DeviceGray" } else { "DeviceRGB" };
-            (p.data.clone(), cs)
-        } else {
-            let mut buf = Cursor::new(Vec::new());
-            image::DynamicImage::ImageRgb8(img.to_rgb8())
-                .write_to(&mut buf, image::ImageFormat::Jpeg)?;
-            (buf.into_inner(), "DeviceRGB")
+        // An RGB or grey JPEG is embedded as it is (only its header is
+        // read); any other image (PNG, CMYK JPEG...) is converted to RGB.
+        let jpeg = p.data.starts_with(&[0xFF, 0xD8]).then(|| {
+            use image::ImageDecoder;
+            let d = image::codecs::jpeg::JpegDecoder::new(Cursor::new(&p.data)).ok()?;
+            let cs = match d.original_color_type() {
+                image::ExtendedColorType::Rgb8 => "DeviceRGB",
+                image::ExtendedColorType::L8 => "DeviceGray",
+                _ => return None,
+            };
+            Some((d.dimensions(), cs))
+        });
+        let ((w, h), data, cs) = match jpeg.flatten() {
+            Some((size, cs)) => (size, p.data.clone(), cs),
+            None => {
+                let img = image::load_from_memory(&p.data).context(p.name.clone())?;
+                let mut buf = Cursor::new(Vec::new());
+                image::DynamicImage::ImageRgb8(img.to_rgb8()).write_to(&mut buf, image::ImageFormat::Jpeg)?;
+                ((img.width(), img.height()), buf.into_inner(), "DeviceRGB")
+            }
         };
         let img_stream = Stream::new(
             dictionary! {
@@ -1160,11 +1169,13 @@ pub fn write_comic_info(path: &Path, info: &ComicInfo) -> Result<()> {
                 zw.finish()?;
                 Ok(())
             })();
-            if let Err(e) = result {
+            // Closed before being replaced (Windows does not replace an
+            // open file).
+            drop(src);
+            if let Err(e) = result.and_then(|()| replace_file(&tmp, path)) {
                 let _ = std::fs::remove_file(&tmp);
                 return Err(e);
             }
-            replace_file(&tmp, path)?;
         }
         BookFormat::SevenZip | BookFormat::Tar => {
             let entries = read_all_entries(path, fmt)?;
@@ -1173,9 +1184,9 @@ pub fn write_comic_info(path: &Path, info: &ComicInfo) -> Result<()> {
                 .filter(|p| !is_comicinfo_name(&p.name))
                 .collect();
             let out_fmt = if fmt == BookFormat::Tar { OutputFormat::Cbt } else { OutputFormat::Cb7 };
-            let tmp = temp_sibling(path);
-            write_book(&tmp, out_fmt, &pages, Some(info), 2)?;
-            replace_file(&tmp, path)?;
+            // The entries are in memory: the book is written next to itself,
+            // then renamed onto it.
+            write_book(path, out_fmt, &pages, Some(info), 2)?;
         }
         BookFormat::Rar => {
             let rar = rar_program().ok_or_else(|| {
@@ -1326,8 +1337,12 @@ fn zip_update_in_place(path: &Path, xml: &[u8]) -> Result<bool> {
     out.extend_from_slice(&(comment.len() as u16).to_le_bytes());
     out.extend_from_slice(&comment);
     f.seek(SeekFrom::End(0))?;
-    f.write_all(&out)?;
-    f.sync_all()?;
+    // An interrupted write is cut off: the file ends again with its former
+    // central directory, and stays readable.
+    if let Err(e) = f.write_all(&out).and_then(|()| f.sync_all()) {
+        let _ = f.set_len(len);
+        return Err(e.into());
+    }
     Ok(true)
 }
 

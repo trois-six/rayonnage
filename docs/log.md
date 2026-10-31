@@ -1,6 +1,7 @@
 # Documentation Update Log
 
 ## 2026-10-31
+* **Update**: [Library §5](library.md#5-what-is-read-from-a-book) — ComicInfo.xml in UTF-16 or Latin-1 is read; an XML file next to a book is used only if it is a ComicInfo.xml.
 * **Update**: [Interface §4](interface.md), [Bedetheque §2](bedetheque.md) — Delete acts in the book list only; Enter chooses and a double-click opens the page in the Bedetheque chooser; edition links.
 * **Update**: [Architecture](architecture.md) — bedetheque.com pages are read with `regex`, not `scraper`.
 * **Update**: [File Organization §3](organizer.md#3-profiles) — safety of the files when moving, copying and overwriting; undo kept for what could not be put back.

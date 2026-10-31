@@ -912,21 +912,44 @@ fn update_info_panel(state: &State) {
         if st.info_generation.get() != generation {
             return;
         }
-        let (tx, rx) = async_channel::bounded::<Option<Vec<u8>>>(1);
-        std::thread::spawn(move || {
-            let _ = tx.send_blocking(library::thumbnail(&book, 400).ok());
-        });
-        glib::spawn_future_local(async move {
-            let Ok(Some(data)) = rx.recv().await else { return };
-            let Some(st) = weak.upgrade() else { return };
-            if st.info_generation.get() != generation {
-                return;
-            }
-            if let Ok(tex) = gdk::Texture::from_bytes(&glib::Bytes::from_owned(data)) {
-                st.info_cover.set_paintable(Some(&tex));
-            }
-        });
+        show_cover(&st.info_cover, book, move || weak.upgrade().is_some_and(|st| st.info_generation.get() == generation));
     });
+}
+
+/// Shows the cover of `book` in `picture` once read in a thread, if
+/// `wanted` still says so then.
+fn show_cover(picture: &gtk::Picture, book: Book, wanted: impl Fn() -> bool + 'static) {
+    let (tx, rx) = async_channel::bounded::<Option<Vec<u8>>>(1);
+    std::thread::spawn(move || {
+        let _ = tx.send_blocking(library::thumbnail(&book, 400).ok());
+    });
+    let picture = picture.downgrade();
+    glib::spawn_future_local(async move {
+        if let (Ok(Some(data)), Some(p)) = (rx.recv().await, picture.upgrade())
+            && wanted()
+            && let Ok(tex) = gdk::Texture::from_bytes(&glib::Bytes::from_owned(data))
+        {
+            p.set_paintable(Some(&tex));
+        }
+    });
+}
+
+/// The distinct values of `field` in `books` (each item of a list field),
+/// for the auto-completion.
+fn distinct_values(books: &[Book], field: Field) -> std::collections::BTreeSet<String> {
+    let mut set = std::collections::BTreeSet::new();
+    for b in books {
+        let v = field.get(b);
+        if v.is_empty() {
+            continue;
+        }
+        if field.kind() == crate::model::FieldKind::List {
+            set.extend(crate::util::split_list(&v));
+        } else {
+            set.insert(v);
+        }
+    }
+    set
 }
 
 impl AppState {
@@ -1271,14 +1294,12 @@ fn scan_folders(state: &State) {
             st.resort();
             refresh_sidebar(st);
             update_status(st);
-            let mut msg = if stats.cancelled {
+            let msg = if stats.cancelled {
                 t!("Scan cancelled: {0} new, {1} updated, {2} moved, {3} missing", stats.added, stats.updated, stats.moved, nm)
             } else {
                 t!("Scan finished: {0} new, {1} updated, {2} moved, {3} missing", stats.added, stats.updated, stats.moved, nm)
             };
-            if stats.errors > 0 {
-                msg.push_str(&t!(", {0} error(s) — see the log (Ctrl+J)", stats.errors));
-            }
+            let msg = with_errors(msg, stats.errors);
             st.journal.info(&msg);
             st.set_status(&msg);
         },

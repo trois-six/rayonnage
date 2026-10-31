@@ -554,11 +554,13 @@ impl Book {
         if self.info.year <= 0 {
             return None;
         }
-        NaiveDate::from_ymd_opt(
-            self.info.year,
-            self.info.month.clamp(1, 12) as u32,
-            self.info.day.clamp(1, 28) as u32,
-        )
+        // Without a month, the day means nothing; a day past the end of the
+        // month (31 in April) becomes the last one.
+        let Ok(month @ 1..=12) = u32::try_from(self.info.month) else {
+            return NaiveDate::from_ymd_opt(self.info.year, 1, 1);
+        };
+        let day = u32::try_from(self.info.day).unwrap_or(1).clamp(1, 31);
+        (1..=day).rev().find_map(|d| NaiveDate::from_ymd_opt(self.info.year, month, d))
     }
 
     /// The ComicRack "caption": "Series Vol.N #Number - Title (Month Year)".
@@ -1159,6 +1161,17 @@ pub fn default_book_cmp(a: &Book, b: &Book) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_date_keeps_the_day() {
+        let mut b = Book::default();
+        (b.info.year, b.info.month, b.info.day) = (2020, 1, 31);
+        assert_eq!(b.released(), NaiveDate::from_ymd_opt(2020, 1, 31));
+        b.info.month = 4;
+        assert_eq!(b.released(), NaiveDate::from_ymd_opt(2020, 4, 30));
+        (b.info.month, b.info.day) = (-1, 15);
+        assert_eq!(b.released(), NaiveDate::from_ymd_opt(2020, 1, 1));
+    }
 
     #[test]
     fn book_paths_that_are_not_utf8_are_kept() {

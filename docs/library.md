@@ -113,7 +113,8 @@ ignored.
 ## 5. What is read from a book
 
 - **ComicInfo.xml**, from the archive or from an XML file of the same name
-  next to the book, with every field ComicRack CE knows, including the page
+  next to the book (only if it is a ComicInfo.xml; UTF-8, UTF-16 or
+  Latin-1), with every field ComicRack CE knows, including the page
   list (`<Pages>`) with types, sizes, rotation, position and bookmarks.
 - **EPUB metadata**, from the OPF package: title, creators with their role
   (writer, artist, colorist…), publisher, date, language, summary, subjects,

@@ -14,7 +14,7 @@ use anyhow::{Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, BookFormat, OutputFormat, Page};
-use crate::util::{extension_lower, natural_cmp};
+use crate::util::{extension_lower, natural_cmp, sanitize_file_name};
 
 /// Format of the albums taken out of a pack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -132,6 +132,11 @@ fn find_albums(root: &Path) -> Vec<Album> {
             image_dirs.insert(dir.to_path_buf());
         }
     }
+    // Images at the root next to other albums (a cover, a notice) are not
+    // an album: it would be named after the temporary folder.
+    if albums.len() + image_dirs.len() > 1 {
+        image_dirs.remove(root);
+    }
     albums.extend(image_dirs.into_iter().map(Album::Images));
     albums.sort_by(|a, b| {
         let p = |x: &Album| match x {
@@ -140,19 +145,6 @@ fn find_albums(root: &Path) -> Vec<Album> {
         natural_cmp(&p(a), &p(b))
     });
     albums
-}
-
-fn sanitize(name: &str) -> String {
-    let s: String = name
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | '?' | '*' | '|' | '"' | '<' | '>' => '_',
-            ':' => '-',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect();
-    s.trim().trim_end_matches('.').to_string()
 }
 
 /// Destination file that does not exist yet: "name.ext", "name (2).ext"...
@@ -180,7 +172,7 @@ pub fn split(pack: &Path, options: &SplitOptions, progress: &mut dyn FnMut(usize
     let pack_name = pack.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let dest = match &options.target {
         SplitTarget::SameFolder => pack_dir,
-        SplitTarget::PackFolder => pack_dir.join(sanitize(&pack_name)),
+        SplitTarget::PackFolder => pack_dir.join(sanitize_file_name(&pack_name)),
         SplitTarget::Folder(f) => f.clone(),
     };
     std::fs::create_dir_all(&dest)?;
@@ -188,9 +180,9 @@ pub fn split(pack: &Path, options: &SplitOptions, progress: &mut dyn FnMut(usize
     let total = albums.len();
     let mut written = Vec::new();
     for (i, album) in albums.iter().enumerate() {
-        let mut name = sanitize(&album.name());
+        let mut name = sanitize_file_name(&album.name());
         if name.is_empty() {
-            name = format!("{} {}", sanitize(&pack_name), i + 1);
+            name = format!("{} {}", sanitize_file_name(&pack_name), i + 1);
         }
         progress(i, total, &name);
         let out = match (album, options.format) {
@@ -236,8 +228,8 @@ pub fn split(pack: &Path, options: &SplitOptions, progress: &mut dyn FnMut(usize
                 let info = std::fs::read_dir(dir)?
                     .flatten()
                     .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case("ComicInfo.xml"))
-                    .and_then(|e| std::fs::read_to_string(e.path()).ok())
-                    .and_then(|s| crate::comicinfo::parse(&s).ok());
+                    .and_then(|e| std::fs::read(e.path()).ok())
+                    .and_then(|d| crate::comicinfo::parse_bytes(&d).ok());
                 let out = free_path(&dest, &name, fmt.extension());
                 archive::write_book(&out, fmt, &pages, info.as_ref(), 0)?;
                 out
@@ -256,6 +248,17 @@ mod tests {
     use std::io::{Cursor, Write};
 
     use super::*;
+
+    #[test]
+    fn root_images_next_to_albums_are_not_an_album() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("cover.jpg"), b"x").unwrap();
+        std::fs::write(dir.path().join("Album 1.cbz"), b"x").unwrap();
+        std::fs::write(dir.path().join("Album 2.cbz"), b"x").unwrap();
+        let albums = find_albums(dir.path());
+        assert_eq!(albums.len(), 2);
+        assert!(albums.iter().all(|a| matches!(a, Album::File(_))));
+    }
 
     fn png() -> Vec<u8> {
         let img = image::RgbImage::from_pixel(3, 4, image::Rgb([1, 2, 3]));

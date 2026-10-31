@@ -28,7 +28,8 @@ impl AutoNumberOptions {
             alternate,
             start,
             set_count: false,
-            count: start + books.len() as i32 - 1,
+            // A huge first number (an EAN typed as a number) saturates.
+            count: start.saturating_add(i32::try_from(books.len()).unwrap_or(i32::MAX)).saturating_sub(1),
         }
     }
 }
@@ -36,7 +37,7 @@ impl AutoNumberOptions {
 /// Numbers the books in the given (display) order.
 pub fn apply(books: &mut [Book], opts: &AutoNumberOptions) {
     for (i, b) in books.iter_mut().enumerate() {
-        let n = (opts.start + i as i32).to_string();
+        let n = opts.start.saturating_add(i32::try_from(i).unwrap_or(i32::MAX)).to_string();
         if opts.alternate {
             b.info.alternate_number = n;
             if opts.set_count {

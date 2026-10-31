@@ -11,7 +11,7 @@
 //!   increment / decrement the value (same clamping rules as ComicRack).
 
 use std::cell::{Cell, RefCell};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
@@ -19,7 +19,7 @@ use gtk::{gdk, glib};
 
 use super::{AppState, BookObject, State};
 use crate::model::{Book, Field, FieldKind};
-use crate::util::{natural_cmp, parse_number, split_list};
+use crate::util::{natural_cmp, parse_number};
 
 /// Delay of the "slow click" that starts editing (ComicRack: 1 s).
 const SLOW_CLICK_MS: u64 = 700;
@@ -354,18 +354,7 @@ fn completion_values(st: &AppState, field: Field) -> Vec<String> {
     if matches!(field.kind(), FieldKind::Int | FieldKind::Number) || field == Field::FileName {
         return Vec::new();
     }
-    let mut set = BTreeSet::new();
-    for b in &st.library.borrow().books {
-        let v = field.get(b);
-        if v.is_empty() {
-            continue;
-        }
-        if field.kind() == FieldKind::List {
-            set.extend(split_list(&v));
-        } else {
-            set.insert(v);
-        }
-    }
+    let set = super::distinct_values(&st.library.borrow().books, field);
     let mut v: Vec<String> = set.into_iter().collect();
     v.sort_by(|a, b| natural_cmp(a, b));
     v

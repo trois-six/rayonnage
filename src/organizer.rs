@@ -815,7 +815,6 @@ static FIRST_LETTER_RE: LazyLock<Regex> = LazyLock::new(|| {
     )
     .unwrap()
 });
-static RENAME_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r" \([0-9]\)$").unwrap());
 static SPACES_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s\s+").unwrap());
 
 /// Internal folder separator produced by "each value as a folder".
@@ -850,26 +849,23 @@ pub fn replace_illegal_characters(profile: &Profile, text: &str) -> String {
 
 /// Zero-pads the integer part of a number ("7.1", 3 -> "007.1"; "-1", 2 -> "-01").
 /// Non-numeric values are returned unchanged.
+/// Pads the integer part of a number with zeros ("7.1" → "007.1"); other
+/// values ("12a", "NaN", "1e3") are left as they are.
 pub fn pad(value: &str, padding: usize) -> String {
-    let Ok(n) = value.trim().parse::<f64>() else {
+    let v = value.trim();
+    let (sign, body) = match v.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", v),
+    };
+    let (int, rem) = match body.find('.') {
+        Some(i) => body.split_at(i),
+        None => (body, ""),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(int) || !(rem.is_empty() || digits(&rem[1..])) {
         return value.to_string();
-    };
-    let (neg, body): (bool, String) = if n >= 0.0 {
-        (false, value.to_string())
-    } else {
-        (true, value.chars().skip(1).collect())
-    };
-    let (int, rem) = match body.split_once('.') {
-        Some((a, b)) => (a.to_string(), format!(".{b}")),
-        None => (body, String::new()),
-    };
-    format!(
-        "{}{:0>w$}{}",
-        if neg { "-" } else { "" },
-        int,
-        rem,
-        w = padding
-    )
+    }
+    format!("{sign}{int:0>padding$}{rem}")
 }
 
 fn path_str(p: &Path) -> String {
@@ -2143,8 +2139,11 @@ impl<'a> Organizer<'a> {
                 };
                 let line = replace_illegal_characters(p, line);
                 let line = line.trim_matches(|c: char| c == '.' || c.is_whitespace());
+                // Only the folders made from the template: the base folder
+                // is used as it is.
+                let line = if p.replace_multiple_spaces { SPACES_RE.replace_all(line, " ") } else { line.into() };
                 if !line.is_empty() {
-                    rel.push(line);
+                    rel.push(&*line);
                 }
             }
         }
@@ -2153,12 +2152,7 @@ impl<'a> Organizer<'a> {
         } else {
             &p.base_folder
         };
-        let path = Path::new(base).join(rel);
-        if p.replace_multiple_spaces {
-            PathBuf::from(SPACES_RE.replace_all(&path_str(&path), " ").into_owned())
-        } else {
-            path
-        }
+        Path::new(base).join(rel)
     }
 
     fn make_file_name(&mut self, book: &Book, p: &Profile) -> String {
@@ -2783,13 +2777,15 @@ impl<'a> Organizer<'a> {
             .map(|b| (b.id, b.last_page_read))
     }
 
+    /// A free name next to `path`: "name (1).ext", "name (2).ext"... Only
+    /// the file name changes: the folder is kept as it is, even when its
+    /// name is not valid UTF-8.
     fn rename_path(&self, path: &Path) -> Option<PathBuf> {
         let ext = extension_of(path);
-        let s = path_str(path);
-        let base = &s[..s.len() - ext.len()];
-        let base = RENAME_SUFFIX_RE.replace(base, "").into_owned();
+        let name = path.file_name()?.to_string_lossy();
+        let stem = &name[..name.len() - ext.len().min(name.len())];
         (1..=100)
-            .map(|i| PathBuf::from(format!("{base} ({i}){ext}")))
+            .map(|i| path.with_file_name(format!("{stem} ({i}){ext}")))
             .find(|c| !self.moved_books.contains(c) && !c.exists())
     }
 
@@ -3065,11 +3061,13 @@ fn canonical_yes_no(v: &str) -> String {
     .into()
 }
 
+/// Whether the book is in one of the excluded folders (or below): "/BD/DC"
+/// does not exclude "/BD/DC Vertigo".
 fn in_excluded_folder(book: &Book, p: &Profile) -> bool {
-    let path = path_str(&book.file_path);
     p.exclude_folders
         .iter()
-        .any(|f| !f.is_empty() && path.contains(f.as_str()))
+        .map(|f| f.trim())
+        .any(|f| !f.is_empty() && book.file_path.starts_with(f))
 }
 
 fn empty_fields_msg(fields: &[OrgField]) -> String {
@@ -3248,6 +3246,9 @@ mod tests {
         assert_eq!(expand(&b, &lib, &p, "{<month#2>}"), "03");
         assert_eq!(expand(&b, &lib, &p, "{<month#>}"), "3");
         assert_eq!(pad("5", 0), "5");
+        for (v, want) in [("-0", "-000"), ("NaN", "NaN"), ("+5", "+5"), ("1e3", "1e3"), (" 7 ", "007")] {
+            assert_eq!(pad(v, 3), want, "{v}");
+        }
     }
 
     #[test]

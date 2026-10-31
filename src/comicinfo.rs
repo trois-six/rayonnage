@@ -107,6 +107,30 @@ fn unescape_attr(s: &str) -> String {
     out
 }
 
+/// Text of an XML file: UTF-8 (with or without a byte order mark), UTF-16
+/// with a byte order mark, or else Latin-1 (any byte is a character): a
+/// ComicInfo.xml in another encoding must not make the whole book unreadable.
+pub fn decode_xml(data: &[u8]) -> String {
+    let utf16 = |bytes: &[u8], to_u16: fn([u8; 2]) -> u16| {
+        let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().map(|c| to_u16(*c)).collect();
+        String::from_utf16_lossy(&units)
+    };
+    match data {
+        [0xEF, 0xBB, 0xBF, rest @ ..] => String::from_utf8_lossy(rest).into_owned(),
+        [0xFF, 0xFE, rest @ ..] => utf16(rest, u16::from_le_bytes),
+        [0xFE, 0xFF, rest @ ..] => utf16(rest, u16::from_be_bytes),
+        _ => match std::str::from_utf8(data) {
+            Ok(text) => text.to_string(),
+            Err(_) => data.iter().map(|&b| char::from(b)).collect(),
+        },
+    }
+}
+
+/// Parses a ComicInfo.xml file, whatever its encoding (see [`decode_xml`]).
+pub fn parse_bytes(data: &[u8]) -> Result<ComicInfo> {
+    parse(&decode_xml(data))
+}
+
 pub fn parse(xml: &str) -> Result<ComicInfo> {
     let xml = xml.trim_start_matches('\u{feff}');
     let mut reader = Reader::from_str(xml);
@@ -120,6 +144,10 @@ pub fn parse(xml: &str) -> Result<ComicInfo> {
             Event::Start(e) => {
                 depth += 1;
                 let name = e.local_name().as_ref().to_string();
+                // Another XML file next to a book is not its ComicInfo.
+                if depth == 1 && name != "ComicInfo" {
+                    anyhow::bail!(t!("Not a ComicInfo.xml file (root element: {0})", name));
+                }
                 if depth == 2 && name == "Pages" {
                     in_pages = true;
                 } else if in_pages && name == "Page" {
@@ -276,6 +304,16 @@ pub fn to_xml(info: &ComicInfo) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn any_encoding_and_only_comicinfo() {
+        let latin1 = b"<?xml version=\"1.0\" encoding=\"iso-8859-1\"?><ComicInfo><Series>H\xe9ritage</Series></ComicInfo>";
+        assert_eq!(parse_bytes(latin1).unwrap().series, "Héritage");
+        let mut utf16 = vec![0xFF, 0xFE];
+        utf16.extend("<ComicInfo><Series>Été</Series></ComicInfo>".encode_utf16().flat_map(u16::to_le_bytes));
+        assert_eq!(parse_bytes(&utf16).unwrap().series, "Été");
+        assert!(parse_bytes(b"<book><title>Autre</title></book>").is_err());
+    }
     use crate::model::Manga;
 
     #[test]

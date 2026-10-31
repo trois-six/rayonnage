@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, BookFormat, OutputFormat, Page};
 use crate::model::{Book, Manga, PageInfo};
-use crate::util::split_list;
+use crate::util::{sanitize_file_name, split_list};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Target {
@@ -240,19 +240,6 @@ fn page_ranges(spec: &str) -> Vec<(usize, usize)> {
             }
         })
         .collect()
-}
-
-fn sanitize_file_name(s: &str) -> String {
-    let s: String = s
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | '?' | '*' | '|' | '"' | '<' | '>' => '_',
-            ':' => '-',
-            c if c.is_control() => '_',
-            c => c,
-        })
-        .collect();
-    s.trim().trim_end_matches('.').to_string()
 }
 
 pub fn target_path(book: &Book, settings: &ExportSettings, index: usize) -> Result<PathBuf> {
