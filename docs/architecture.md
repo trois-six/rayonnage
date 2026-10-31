@@ -29,7 +29,7 @@ generated: { by: claude-code/claude-opus-5-5, at: 2026-10-29T20:30:00Z }
 | XML | `quick-xml` |
 | Library storage | SQLite through `rusqlite` (bundled), rows in MessagePack (`rmp-serde`) |
 | Settings | JSON through `serde_json` |
-| Web | `reqwest` (blocking, with cookies) and `scraper` for bedetheque.com |
+| Web | `reqwest` (blocking, with cookies), or `curl` when the site refuses it, and `regex` to read the bedetheque.com pages |
 
 The application is a single executable with no runtime besides GTK.
 

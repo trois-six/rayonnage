@@ -234,4 +234,8 @@ pub static ENTRIES: &[(&str, &str)] = &[
     ("Fetch Info from Bedetheque", "Récupérer les infos sur Bedetheque"),
     ("Fetch Info from a Bedetheque Link…", "Récupérer les infos depuis un lien Bedetheque…"),
     ("Fetch info from Bedetheque (Ctrl+B)", "Récupérer les infos sur Bedetheque (Ctrl+B)"),
+    (
+        "bedetheque.com is busy (HTTP {0}): trying again in {1} s",
+        "bedetheque.com est surchargé (HTTP {0}) : nouvel essai dans {1} s",
+    ),
 ];

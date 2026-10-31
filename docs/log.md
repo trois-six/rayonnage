@@ -1,6 +1,7 @@
 # Documentation Update Log
 
 ## 2026-10-31
+* **Update**: [Architecture](architecture.md) — bedetheque.com pages are read with `regex`, not `scraper`.
 * **Update**: [File Organization §3](organizer.md#3-profiles) — safety of the files when moving, copying and overwriting; undo kept for what could not be put back.
 * **Update**: [Library §3](library.md#3-scanning) — the scan reads the folders changed most recently first.
 * **Update**: [Interface §1](interface.md#1-overview), [Architecture §5](architecture.md#5-background-jobs) — operations of different kinds run at the same time.

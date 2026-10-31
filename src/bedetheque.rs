@@ -287,19 +287,17 @@ pub struct Scraper {
     warmed_up: bool,
     use_curl: bool,
     curl: Option<PathBuf>,
+    /// curl's cookie jar, in a private temporary folder (deleted with it):
+    /// a predictable name in the shared temporary folder could be a link
+    /// planted by another user.
     curl_jar: PathBuf,
+    _curl_dir: tempfile::TempDir,
     curl_warmed: bool,
     last_pick: Option<SeriesPick>,
     single_book: bool,
     log: Vec<String>,
     #[cfg(test)]
     fake_pages: std::collections::HashMap<String, String>,
-}
-
-impl Drop for Scraper {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.curl_jar);
-    }
 }
 
 /// The plugin's "dlg*" state for the current book.
@@ -356,16 +354,15 @@ struct Edition {
 
 impl Scraper {
     pub fn new(settings: ScraperSettings) -> Result<Self> {
+        let curl_dir = tempfile::Builder::new().prefix("rayonnage-bedetheque-").tempdir()?;
         Ok(Scraper {
             settings,
             client: build_client()?,
             warmed_up: false,
             use_curl: false,
             curl: find_program("", &["curl"]),
-            curl_jar: std::env::temp_dir().join(format!(
-                "rayonnage-bedetheque-{}-cookies.txt",
-                std::process::id()
-            )),
+            curl_jar: curl_dir.path().join("cookies.txt"),
+            _curl_dir: curl_dir,
             curl_warmed: false,
             last_pick: None,
             single_book: false,
@@ -798,7 +795,7 @@ impl Scraper {
                 c["url"].to_string(),
                 format!("{num}. {}", check_web_char(&c["title"])),
             );
-            if !ctx.number.is_empty() && num == ctx.number && !direct {
+            if !ctx.number.is_empty() && num.eq_ignore_ascii_case(&ctx.number) && !direct {
                 wanted.push(item.clone());
             }
             all.push(item);
@@ -865,6 +862,11 @@ impl Scraper {
         chooser: &dyn Chooser,
     ) -> Result<bool> {
         let st = self.settings.clone();
+        // A link to an edition other than the first ends with its id.
+        let (page_url, edition_id) = match page_url.split_once('#') {
+            Some((base, id)) => (base, Some(id)),
+            None => (page_url, None),
+        };
         let html = self.fetch(page_url)?;
         let info_album = INFOS_ALBUMS.find(&html).map_or("", |m| m.as_str());
 
@@ -933,7 +935,10 @@ impl Scraper {
         }
 
         let mut picked = 0;
-        if editions.len() > 1 {
+        let linked = edition_id.and_then(|id| if id == "reed" { Some(0) } else { editions.iter().position(|e| e.id == id) });
+        if let Some(i) = linked {
+            picked = i;
+        } else if editions.len() > 1 {
             let by_alt = (!ctx.alt_number.is_empty())
                 .then(|| editions.iter().position(|e| e.a == ctx.alt_number))
                 .flatten();
@@ -1030,7 +1035,10 @@ impl Scraper {
         }
         if st.colorist {
             b.info.colorist = generic_artists(&[&ALBUM_COLOR], info, generic);
-            if b.info.colorist.contains("<N&B>") {
+            // Read from the page itself: "<N&B>" is a generic name, left out
+            // of the colorist unless generic artists are accepted.
+            let raw = ALBUM_COLOR.captures(info).map(|c| check_web_char(&c[1])).unwrap_or_default();
+            if raw.contains("<N&B>") {
                 b.info.black_and_white = YesNo::Yes;
             } else if !b.info.colorist.is_empty() {
                 b.info.black_and_white = YesNo::No;
@@ -1073,9 +1081,9 @@ impl Scraper {
                 .map(|s| check_web_char(&s).trim().to_string())
                 .unwrap_or_default();
             let digits: String = isbn.chars().filter(|c| !matches!(c, '-' | ' ')).collect();
-            if digits.len() == 13 && digits.chars().all(|c| c.is_ascii_digit()) {
-                b.info.gtin = digits;
-            }
+            // The EAN follows the edition's ISBN, even when it has none.
+            let ean = digits.len() == 13 && digits.chars().all(|c| c.is_ascii_digit());
+            b.info.gtin = if ean { digits } else { String::new() };
             b.isbn = isbn;
             self.debug(t!("ISBN: {0}", b.isbn));
         }
@@ -1113,28 +1121,32 @@ impl Scraper {
                 }
             }
             let mut summary = String::new();
-            if !resume.trim().is_empty() {
-                let resume = strip_tags(&check_web_char(&resume)).trim().to_string();
-                let print_serie = st.serie_resume_everywhere || b.info.number == "1";
-                let title_line = if b.info.title.is_empty() {
-                    String::new()
-                } else {
-                    format!(">{}< \n", b.info.title)
-                };
-                if !ctx.serie_resume.is_empty()
-                    && print_serie
-                    && remove_accents(&ctx.serie_resume) != remove_accents(&resume)
-                {
-                    summary = ctx.serie_resume.clone();
-                    if !resume.is_empty() {
-                        summary.push_str(&format!("\n\n{title_line}{resume}"));
-                    }
-                } else if !resume.is_empty() {
-                    summary = format!("{title_line}{resume}");
-                }
-                self.debug(t!("Album summary found"));
-            } else {
+            let resume = if resume.trim().is_empty() {
                 self.debug(t!("No album summary"));
+                String::new()
+            } else {
+                self.debug(t!("Album summary found"));
+                strip_tags(&check_web_char(&resume)).trim().to_string()
+            };
+            // The number may be padded ("01") by now. The series summary is
+            // kept even when the album has none.
+            let first_volume = b.info.number.trim().parse::<f64>() == Ok(1.0);
+            let print_serie = st.serie_resume_everywhere || first_volume;
+            let title_line = if b.info.title.is_empty() {
+                String::new()
+            } else {
+                format!(">{}< \n", b.info.title)
+            };
+            if !ctx.serie_resume.is_empty()
+                && print_serie
+                && remove_accents(&ctx.serie_resume) != remove_accents(&resume)
+            {
+                summary = ctx.serie_resume.clone();
+                if !resume.is_empty() {
+                    summary.push_str(&format!("\n\n{title_line}{resume}"));
+                }
+            } else if !resume.is_empty() {
+                summary = format!("{title_line}{resume}");
             }
             if let Some(c) = ALBUM_INFOEDITION.captures(info)
                 && &c[1] != " &nbsp;"
@@ -1272,19 +1284,7 @@ impl Scraper {
             b.info.summary = check_web_char(&resume).trim().to_string();
         }
         if st.printed {
-            (b.info.month, b.info.year) = REVUE_DEPOT
-                .captures(entete)
-                .and_then(|c| {
-                    let d: Vec<char> = c[1].chars().collect();
-                    let part = |a: usize, z: usize| {
-                        d.get(a..z.min(d.len()))
-                            .map(|s| s.iter().collect::<String>())
-                    };
-                    let m = part(3, 5)?.trim().parse().ok()?;
-                    let y = part(6, 10)?.trim().parse().ok()?;
-                    Some((m, y))
-                })
-                .unwrap_or((-1, -1));
+            (b.info.month, b.info.year) = REVUE_DEPOT.captures(entete).map_or((-1, -1), |c| month_year(&c[1]));
         }
         if st.publisher {
             b.info.publisher = REVUE_EDITEUR
@@ -1386,6 +1386,8 @@ impl Scraper {
     // -- HTTP -----------------------------------------------------------------
 
     fn fetch(&mut self, url: &str) -> Result<String> {
+        /// Wait before the second try when the site answers it is busy.
+        const RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
         let url = full_url(url);
         self.debug(format!("GET {url}"));
         #[cfg(test)]
@@ -1424,7 +1426,7 @@ impl Scraper {
                     let _ = self.client.get(BASE_URL).send().and_then(|r| r.text());
                     match http_get(&self.client, &url) {
                         Ok(t) => return Ok(t),
-                        Err(HttpError::Status(403)) => {
+                        Err(HttpError::Status(403)) if self.curl.is_some() => {
                             self.info(t!("Refused again (403): using curl"));
                             self.use_curl = true;
                         }
@@ -1434,6 +1436,16 @@ impl Scraper {
                                 return Err(e);
                             }
                         }
+                    }
+                }
+                // Too many requests, or the site busy: one more try a bit later.
+                Err(HttpError::Status(c @ (429 | 503))) => {
+                    self.info(t!("bedetheque.com is busy (HTTP {0}): trying again in {1} s", c, RETRY_DELAY.as_secs()));
+                    std::thread::sleep(RETRY_DELAY);
+                    match http_get(&self.client, &url) {
+                        Ok(t) => return Ok(t),
+                        Err(HttpError::Status(c)) => bail!(t!("HTTP {0} for {1}", c, url)),
+                        Err(HttpError::Transport(e)) => return Err(e),
                     }
                 }
                 Err(HttpError::Status(c)) => bail!(t!("HTTP {0} for {1}", c, url)),
@@ -1628,8 +1640,8 @@ regexes! {
     ALBUM_COUVERT = r"(?is)<dt>Couverture</dt>\s*<dd>(.+?)<dt>[^<>]+?</dt>";
     ALBUM_LETTRAGE = r"(?is)<dt>Lettrage</dt>\s*<dd>(.+?)<dt>[^<>]+?</dt>";
     ALBUM_INKER = r"(?is)<dt>Encrage</dt>\s*<dd>(.+?)<dt>[^<>]+?</dt>";
-    ALBUM_DEPOT = r"(?is)<dt>D.p.t L.gal</dt>\s+<dd>(?P<month>[\d|-]{0,2})/?(?P<year>[\d]{2,4})?";
-    ALBUM_ACHEVE = r"(?is)<dt>Achev.*?\s:\s</dt>\s+<dd>(?P<month>[\d|-]{0,2})/?(?P<year>[\d]{2,4})?<";
+    ALBUM_DEPOT = r"(?is)<dt>D.p.t L.gal</dt>\s+<dd>(?P<date>[^<]*)";
+    ALBUM_ACHEVE = r"(?is)<dt>Achev.*?\s:\s</dt>\s+<dd>(?P<date>[^<]*)<";
     ALBUM_EDITEUR = r"(?is)<dt>.diteur</dt>\s+<dd>(.*?)</dd>";
     ALBUM_COLLECTION = r"(?is)<dt>Collection</dt><dd>(?:<a href.+?>)*([^><]+?)<";
     ALBUM_TAILLE = r"(?is)<dt>Format</dt>\s*<dd>(.*?)</dd>";
@@ -1644,7 +1656,7 @@ regexes! {
     REVUE_TITLE = r#"(?is)<h3 class="titre".+?</span>(.+?)</h3>"#;
     REVUE_RESUME = r"(?is)<em>Sommaire.*?</em>(.*?)</p";
     REVUE_PLANCHES = r"(?is)>Nb\sPages\s:\s??</label>(.*?)<";
-    REVUE_DEPOT = r"(?is)<label>Parution\s:s??</label>(.*?)</";
+    REVUE_DEPOT = r"(?is)<label>Parution\s:\s?</label>(.*?)</";
     REVUE_PERIOD = r"(?is)<label>P.riodicit.\s:\s??</label>(.*?)</";
     REVUE_EDITEUR = r"(?is)<label>Editeur\s:\s?</label>(.*?)</";
     STRIP_TAGS = r"(?is)<[^<>]+?>";
@@ -1672,19 +1684,18 @@ fn find_series_in_index(page: &str, serie: &str) -> Option<String> {
     let target = rx(&format!(
         r#"(?is)<span class="bdt-liste-libelle"><b>{name}</b></span>"#
     ));
-    for c in INDEX_A_HREF.captures_iter(page) {
-        let start = c.get(0)?.end();
-        let end_a = CLOSE_A
-            .find_at(page, start)
-            .map_or(page.len(), |m| m.start());
-        if let Some(t) = target.find_at(page, start)
-            && t.start() > start
-            && t.start() <= end_a
-        {
-            return Some(c[1].to_string());
-        }
-    }
-    None
+    // One pass over the links: for each place the name appears, the link
+    // just before it, if it is not closed in between.
+    let links: Vec<(usize, &str)> = INDEX_A_HREF
+        .captures_iter(page)
+        .filter_map(|c| Some((c.get(0)?.end(), c.get(1)?.as_str())))
+        .collect();
+    target.find_iter(page).find_map(|t| {
+        let i = links.partition_point(|(end, _)| *end < t.start());
+        let (start, link) = *links.get(i.checked_sub(1)?)?;
+        let closed = CLOSE_A.find_at(page, start).is_some_and(|m| m.start() < t.start());
+        (!closed).then(|| link.to_string())
+    })
 }
 
 /// Search results: (relative link "serie-…" / "revue-…", name).
@@ -1709,14 +1720,17 @@ fn parse_search_results(page: &str) -> Vec<(String, String)> {
     list
 }
 
+/// The series summary. The page is searched as it is, and only the summary
+/// decoded: decoding the whole page first would turn an escaped "<" of the
+/// text into a tag.
 fn serie_resume(page: &str) -> String {
-    let page = check_web_char(&page.replace("\r\n", ""));
+    let page = page.replace("\r\n", "");
     let resume = SERIE_RESUME
         .captures(&page)
-        .map(|c| strip_tags(&c[1]).trim().to_string())
+        .map(|c| strip_tags(&c[1]))
         .unwrap_or_default();
-    let resume = TOUT_SUR_LA_SERIE.replace_all(&resume, "");
-    check_web_char(&resume).trim().to_string()
+    let resume = check_web_char(&resume);
+    TOUT_SUR_LA_SERIE.replace_all(&resume, "").trim().to_string()
 }
 
 /// Number of albums in the series ("volume numbering" and "only if finished"
@@ -1741,7 +1755,8 @@ fn series_count(page: &str, st: &ScraperSettings, complete: YesNo, numeric: bool
 }
 
 fn language_iso(langue: &str) -> Option<&'static str> {
-    let p: String = langue.chars().take(2).collect();
+    // Without accents: "Néerlandais".
+    let p: String = remove_accents(langue).chars().take(2).collect();
     Some(match p.as_str() {
         "Fr" => "fr",
         "Al" => "de",
@@ -1789,28 +1804,30 @@ fn parse_name(extracted: &str, accept_generic: bool) -> String {
     check_web_char(&name).trim().to_string()
 }
 
-/// Legal deposit "MM/YYYY" → (month, year), (-1, -1) if missing or "-".
+/// Legal deposit "MM/YYYY" (or "-/YYYY", "YYYY") → (month, year), -1 for
+/// what is missing.
 fn depot_legal(info: &str) -> (i32, i32) {
-    let Some(c) = ALBUM_DEPOT.captures(info) else {
-        return (-1, -1);
-    };
-    let month = c.name("month").map_or("", |m| m.as_str());
-    if month == "-" || month.is_empty() {
-        return (-1, -1);
-    }
-    let m = month.parse::<i32>().ok();
-    let y = c.name("year").and_then(|y| y.as_str().parse::<i32>().ok());
-    match (m, y) {
-        (Some(m), Some(y)) => (m, y),
-        _ => (-1, -1),
-    }
+    ALBUM_DEPOT.captures(info).map_or((-1, -1), |c| month_year(&c["date"]))
 }
 
+/// "Achevé d'imprimer", when it gives the month.
 fn acheve_imprimer(info: &str) -> Option<(i32, i32)> {
-    let c = ALBUM_ACHEVE.captures(info)?;
-    let m = c.name("month")?.as_str().parse().ok()?;
-    let y = c.name("year")?.as_str().parse().ok()?;
-    Some((m, y))
+    let (m, y) = month_year(&ALBUM_ACHEVE.captures(info)?["date"]);
+    (m >= 1).then_some((m, y))
+}
+
+/// "MM/YYYY", "M/YYYY", "-/YYYY", "YYYY" or "DD/MM/YYYY" → (month, year): a
+/// month in 1..=12 and a 4-digit year, -1 otherwise.
+fn month_year(date: &str) -> (i32, i32) {
+    let parts: Vec<&str> = date.trim().split('/').map(str::trim).collect();
+    let (month, year) = match parts[..] {
+        [year] => ("", year),
+        [.., month, year] => (month, year),
+        [] => ("", ""),
+    };
+    let year = if year.len() == 4 { year.parse().unwrap_or(-1) } else { -1 };
+    let month = month.parse().ok().filter(|m| (1..=12).contains(m)).unwrap_or(-1);
+    (month, year)
 }
 
 // ---------------------------------------------------------------------------
@@ -1862,11 +1879,10 @@ pub fn titlize(s: &str, titleit: bool) -> String {
     if !titleit {
         return s.to_string();
     }
-    let chars: Vec<char> = s.chars().collect();
-    let n = s.trim().chars().count();
+    let chars: Vec<char> = s.trim().chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut up = false;
-    for (i, &c) in chars.iter().enumerate().take(n) {
+    for (i, &c) in chars.iter().enumerate() {
         if up || i == 0 {
             out.extend(c.to_uppercase());
         } else {
@@ -2070,16 +2086,17 @@ fn zfill(s: &str, width: usize) -> String {
 
 /// Parses the book number: (number, forced alternate number, numeric?).
 /// "1.5" → ("1", ".5"), "07" → "7".
+/// "1,5" and "1/2" split like "1.5"; other text is kept as it is, trimmed.
 fn split_number(raw: &str, seps: &[char]) -> (String, Option<String>, bool) {
-    if !is_numeric(raw) {
-        return (raw.to_string(), None, false);
+    let raw = raw.trim();
+    if let Some(p) = raw.find(seps)
+        && let Ok(n) = raw[..p].parse::<i64>()
+    {
+        return (n.to_string(), Some(raw[p..].to_string()), true);
     }
-    match raw.find(seps) {
-        None => match raw.trim().parse::<i64>() {
-            Ok(n) => (n.to_string(), None, true),
-            Err(_) => (raw.to_string(), None, false),
-        },
-        Some(p) => (raw[..p].to_string(), Some(raw[p..].to_string()), true),
+    match raw.parse::<i64>() {
+        Ok(n) => (n.to_string(), None, true),
+        Err(_) => (raw.to_string(), None, is_numeric(raw)),
     }
 }
 
@@ -2238,6 +2255,7 @@ mod tests {
         assert_eq!(titlize("l'homme qui rit", true), "L'Homme Qui Rit");
         assert_eq!(titlize("tom's diner", true), "Tom's Diner");
         assert_eq!(titlize("abc ", true), "Abc");
+        assert_eq!(titlize("  les 5 terres ", true), "Les 5 Terres");
         assert_eq!(remove_accents("Âme Rouge œuvre"), "ame Rouge oeuvre");
         assert_eq!(
             check_web_char("L&#039;Enfer &amp; &lt;N&amp;B&gt; &eacute;"),
@@ -2281,6 +2299,8 @@ mod tests {
             ("1".into(), Some(".5".into()), true)
         );
         assert_eq!(split_number("HS1", s), ("HS1".into(), None, false));
+        assert_eq!(split_number(" 1,5 ", s), ("1".into(), Some(",5".into()), true));
+        assert_eq!(split_number("hs1 ", s), ("hs1".into(), None, false));
         assert_eq!(split_number("", s), ("".into(), None, false));
     }
 
@@ -2340,10 +2360,11 @@ mod tests {
         );
         assert_eq!(depot_legal(&info), (11, 2000));
         assert_eq!(acheve_imprimer(&info), Some((3, 2001)));
-        assert_eq!(
-            depot_legal("<dt>Dépôt légal</dt> <dd>-/2001</dd>"),
-            (-1, -1)
-        );
+        assert_eq!(depot_legal("<dt>Dépôt légal</dt> <dd>-/2001</dd>"), (-1, 2001));
+        assert_eq!(depot_legal("<dt>Dépôt légal</dt> <dd>1985</dd>"), (-1, 1985));
+        assert_eq!(month_year(" 15/03/1999"), (3, 1999));
+        assert_eq!(month_year("3/1999"), (3, 1999));
+        assert_eq!(month_year("13/1999"), (-1, 1999));
     }
 
     #[test]
