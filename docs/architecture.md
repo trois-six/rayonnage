@@ -94,6 +94,10 @@ Every long operation runs through `run_job` (`ui/jobs.rs`), with a kind and
 the books whose files it changes. Operations of different kinds run at the
 same time; one waits for those asked before it of the same kind, or that
 change the files of some of the same books.
+An operation that waited takes its books when it starts (`run_job_with`
+and its `prepare` step, on the GTK thread), not when it was asked for. If
+its thread stops on an internal error, the operation is removed and the
+ones waiting for it run.
 
 - the work runs in a thread and talks to the GTK thread through an
   `async_channel`: progress (`progress`, `pulse`), log lines (`log`,

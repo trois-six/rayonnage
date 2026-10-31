@@ -75,7 +75,10 @@ pub fn open(state: &State) {
                 set_count: set_count.is_active(),
                 count: count.value() as i32,
             };
-            let mut books = books.clone();
+            // The books as they are now: an operation may have changed them
+            // while the dialog was open.
+            let ids: Vec<u64> = books.iter().map(|b| b.id).collect();
+            let mut books = st.current_books(&ids);
             apply(&mut books, &opts);
             let n = books.len();
             st.update_books(books, true);

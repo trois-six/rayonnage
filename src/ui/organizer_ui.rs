@@ -10,7 +10,7 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use super::widgets::{self, Form};
-use super::{JobCtx, JobKind, State, refresh_sidebar, run_job};
+use super::{JobCtx, JobKind, State, refresh_sidebar, run_job_with};
 use crate::model::{Book, Field};
 use crate::organizer::{
     self, DEFAULT_ILLEGAL_CHARACTERS, DuplicateAction, EMPTY_DATA_FIELDS, ExcludeMode,
@@ -101,15 +101,23 @@ pub fn undo(state: &State) {
         t!("The files moved during the last organization will be put back in their original location."),
         t!("Undo organization"),
         move || {
-            let library = shadow(&st.library.borrow().books);
-            let settings = st.settings.borrow().organizer.clone();
-            let folders = st.settings.borrow().library_folders.clone();
-            run_job(
+            // The books moved back: no other operation changes their files
+            // meanwhile.
+            let files: std::collections::HashSet<_> = organizer::undo_files(&path).into_iter().collect();
+            let ids = st.library.borrow().books.iter().filter(|b| files.contains(&b.file_path)).map(|b| b.id).collect();
+            run_job_with(
                 &st,
                 JobKind::Organize,
-                Vec::new(),
+                ids,
                 t!("Undoing the organization…"),
-                move |ctx| organizer::undo(&library, &folders, &settings, &JobInteraction { ctx }, &path),
+                |st| {
+                    let library = shadow(&st.library.borrow().books);
+                    let s = st.settings.borrow();
+                    (library, s.library_folders.clone(), s.organizer.clone())
+                },
+                move |(library, folders, settings), ctx| {
+                    organizer::undo(&library, &folders, &settings, &JobInteraction { ctx }, &path)
+                },
                 |st, r| apply_result(st, r, t!("Organization undo")),
             );
         },
@@ -135,17 +143,20 @@ fn shadow(books: &[Book]) -> Vec<Book> {
 }
 
 fn launch(state: &State, books: Vec<Book>, profiles: Vec<Profile>) {
-    let books = shadow(&books);
-    let library = shadow(&state.library.borrow().books);
     let undo_path = Settings::undo_path();
-    let folders = state.settings.borrow().library_folders.clone();
-    let ids = books.iter().map(|b| b.id).collect();
-    run_job(
+    let ids: Vec<u64> = books.iter().map(|b| b.id).collect();
+    run_job_with(
         state,
         JobKind::Organize,
-        ids,
+        ids.clone(),
         t!("Organizing books…"),
-        move |ctx| {
+        // The books as they are when the run starts.
+        move |st| {
+            let books = shadow(&st.current_books(&ids));
+            let library = shadow(&st.library.borrow().books);
+            (books, library, st.settings.borrow().library_folders.clone())
+        },
+        move |(books, library, folders), ctx| {
             organizer::run(
                 &books,
                 &library,
@@ -159,41 +170,38 @@ fn launch(state: &State, books: Vec<Book>, profiles: Vec<Profile>) {
     );
 }
 
-/// Applies a run (or undo) result to the library on the GTK thread.
+/// Applies a run (or undo) result to the library on the GTK thread, to the
+/// books as they are now. A move or a copy keeps the size and dates of a
+/// file: they are not read again.
 fn apply_result(st: &State, mut r: RunResult, title: &str) {
-    let mut updates: HashMap<u64, Book> = HashMap::new();
-    {
-        let lib = st.library.borrow();
-        for (id, path) in &r.moved {
-            if r.removed.contains(id) {
-                continue;
-            }
-            if let Some(b) = lib.get(*id) {
-                let b = updates.entry(*id).or_insert_with(|| b.clone());
-                b.file_path = path.clone();
-                b.refresh_file_stats();
-            }
+    let moved: HashMap<u64, PathBuf> = r.moved.iter().cloned().collect();
+    let progress: HashMap<u64, i32> = r.read_progress.iter().copied().collect();
+    let ids: Vec<u64> = moved.keys().chain(progress.keys()).copied().filter(|id| !r.removed.contains(id)).collect();
+    st.edit_books(ids, |b| {
+        let mut changed = false;
+        // Unless the book has another file since the run started.
+        if let Some(to) = moved.get(&b.id)
+            && r.origins.get(&b.id) == Some(&b.file_path)
+        {
+            b.file_path = to.clone();
+            changed = true;
         }
-        for (id, page) in &r.read_progress {
-            if r.removed.contains(id) {
-                continue;
-            }
-            if let Some(b) = lib.get(*id) {
-                updates
-                    .entry(*id)
-                    .or_insert_with(|| b.clone())
-                    .last_page_read = *page;
-            }
+        if let Some(page) = progress.get(&b.id) {
+            b.last_page_read = *page;
+            changed = true;
         }
-    }
+        changed
+    });
     if !r.removed.is_empty() {
         st.remove_books(&r.removed);
     }
-    let added = std::mem::take(&mut r.added);
+    // A copy already in the library (added by a scan meanwhile) is not
+    // added again.
+    let known: std::collections::HashSet<PathBuf> = st.library.borrow().books.iter().map(|b| b.file_path.clone()).collect();
+    let added: Vec<Book> = std::mem::take(&mut r.added).into_iter().filter(|b| !known.contains(&b.file_path)).collect();
     if !added.is_empty() {
         st.add_books(added);
     }
-    st.update_books(updates.into_values().collect(), false);
     st.save_library();
     refresh_sidebar(st);
     st.set_status(&t!(

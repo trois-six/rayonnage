@@ -4,7 +4,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use super::widgets::{self, Form};
-use super::{JobKind, State, refresh_sidebar, run_job};
+use super::{JobKind, State, refresh_sidebar, run_job_with};
 use crate::archive::OutputFormat;
 use crate::model::Book;
 use crate::packs::{SplitFormat, SplitOptions, SplitTarget, split};
@@ -125,13 +125,14 @@ pub fn open(state: &State) {
 
 fn run(state: &State, packs: Vec<Book>, options: SplitOptions) {
     let delete_pack = options.delete_pack;
-    let ids = packs.iter().map(|b| b.id).collect();
-    run_job(
+    let ids: Vec<u64> = packs.iter().map(|b| b.id).collect();
+    run_job_with(
         state,
         JobKind::Split,
-        ids,
+        ids.clone(),
         t!("Splitting packs…"),
-        move |ctx| {
+        move |st| st.current_books(&ids),
+        move |packs, ctx| {
             let mut new_books = Vec::new();
             let mut done_packs = Vec::new();
             let mut errors = Vec::new();

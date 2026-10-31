@@ -31,7 +31,7 @@ use crate::library::{self, BookChange, Library, ScanEvent};
 use crate::model::{Book, Field, default_book_cmp};
 use crate::settings::Settings;
 pub use book_object::BookObject;
-pub use jobs::{JobCtx, JobKind, run_job};
+pub use jobs::{JobCtx, JobKind, run_job, run_job_with};
 
 pub const APP_ID: &str = "org.troissix.Rayonnage";
 
@@ -989,6 +989,13 @@ impl AppState {
         self.store_books(changed, InfoChange::None);
     }
 
+    /// The books with these ids as they are now, in that order (the ones
+    /// removed meanwhile are left out).
+    pub fn current_books(&self, ids: &[u64]) -> Vec<Book> {
+        let lib = self.library.borrow();
+        ids.iter().filter_map(|id| lib.get(*id).cloned()).collect()
+    }
+
     /// Like `update_books` with `dirty`, for an operation that writes the
     /// files itself at its end.
     pub fn update_books_written_later(self: &Rc<Self>, books: Vec<Book>) {
@@ -1225,13 +1232,14 @@ fn update_files(state: &State) {
 }
 
 pub fn write_files(state: &State, books: Vec<Book>) {
-    let ids = books.iter().map(|b| b.id).collect();
-    run_job(
+    let ids: Vec<u64> = books.iter().map(|b| b.id).collect();
+    run_job_with(
         state,
         JobKind::WriteFiles,
-        ids,
+        ids.clone(),
         t!("Updating book files…"),
-        move |ctx| {
+        move |st| st.current_books(&ids),
+        move |books, ctx| {
             let total = books.len();
             let mut ok = Vec::new();
             let mut errors = Vec::new();
@@ -1284,13 +1292,15 @@ pub fn write_files(state: &State, books: Vec<Book>) {
 
 fn refresh(state: &State, force: bool) {
     let Some(books) = state.require_selection() else { return };
+    let ids: Vec<u64> = books.iter().map(|b| b.id).collect();
     let folders = state.settings.borrow().library_folders.clone();
-    run_job(
+    run_job_with(
         state,
         JobKind::Refresh,
         Vec::new(),
         t!("Rereading files…"),
-        move |ctx| {
+        move |st| st.current_books(&ids),
+        move |books, ctx| {
             let total = books.len();
             let mut ok = Vec::new();
             let mut errors = Vec::new();

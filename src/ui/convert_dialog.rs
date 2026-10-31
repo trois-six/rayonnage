@@ -7,7 +7,7 @@ use gtk::glib;
 use gtk::prelude::*;
 
 use super::widgets::{self, Form};
-use super::{JobKind, State, refresh_sidebar, run_job};
+use super::{JobKind, State, refresh_sidebar, run_job_with};
 use crate::archive::OutputFormat;
 use crate::convert::{DoublePages, ExportSettings, Naming, PageFormat, PageResize, Target, export};
 use crate::i18n::tr;
@@ -401,12 +401,14 @@ fn run_export_books(state: &State, settings: ExportSettings, books: Vec<Book>) {
     let ids: Vec<u64> = books.iter().map(|b| b.id).collect();
     let go = move || {
         let s = settings.clone();
-        run_job(
+        let start_ids = ids.clone();
+        run_job_with(
             &st,
             JobKind::Convert,
             ids.clone(),
             t!("Converting…"),
-            move |ctx| {
+            move |st| st.current_books(&start_ids),
+            move |books, ctx| {
                 let groups: Vec<Vec<Book>> = if s.combine { vec![books] } else { books.into_iter().map(|b| vec![b]).collect() };
                 let total = groups.len();
                 let mut results = Vec::new();
@@ -426,35 +428,43 @@ fn run_export_books(state: &State, settings: ExportSettings, books: Vec<Book>) {
             },
             |st, (results, errors)| {
                 let n = results.len();
-                let mut updated = Vec::new();
                 let mut removed = Vec::new();
                 let mut added = Vec::new();
+                let mut replaced = std::collections::HashMap::new();
                 for r in results {
                     st.journal.info(&t!("Converted: {0}", r.new_path.display()));
                     if r.replace_in_library {
-                        let first = r.source_ids[0];
-                        if let Some(mut b) = st.library.borrow().get(first).cloned() {
-                            b.file_path = r.new_path.clone();
-                            b.info = r.info.clone();
-                            b.info_dirty = false;
-                            b.refresh_file_stats();
-                            updated.push(b);
-                        }
                         removed.extend(r.source_ids.iter().skip(1).copied());
+                        replaced.insert(r.source_ids[0], r);
                     } else {
                         if r.deleted_sources {
                             removed.extend(r.source_ids.iter().copied());
                         }
                         if r.add_to_library && !st.library.borrow().books.iter().any(|b| b.file_path == r.new_path) {
-                            let mut b = Book::from_file(r.new_path.clone());
-                            b.info = r.info.clone();
+                            let mut b = r.new_stats;
+                            b.info = r.info;
                             added.push(b);
                         }
                     }
                 }
+                // Applied to the books as they are now, if they still have the
+                // file converted; information changed during the conversion is
+                // kept, to be written into the new file.
+                st.edit_books(replaced.keys().copied().collect::<Vec<_>>(), |b| {
+                    let Some(r) = replaced.remove(&b.id).filter(|r| r.source_path == b.file_path) else { return false };
+                    b.file_path = r.new_path;
+                    (b.file_size, b.file_modified, b.file_created) =
+                        (r.new_stats.file_size, r.new_stats.file_modified, r.new_stats.file_created);
+                    if b.info == r.source_info {
+                        b.info = r.info;
+                        b.info_dirty = !r.info_embedded;
+                    } else {
+                        b.info_dirty = true;
+                    }
+                    true
+                });
                 st.remove_books(&removed);
                 st.add_books(added);
-                st.update_books(updated, false);
                 st.save_library();
                 refresh_sidebar(st);
                 for e in &errors {

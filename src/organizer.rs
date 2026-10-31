@@ -741,6 +741,8 @@ pub struct LogEntry {
 pub struct RunResult {
     /// Books whose file moved (book id, new path).
     pub moved: Vec<(u64, PathBuf)>,
+    /// The path each moved book had before the run.
+    pub origins: HashMap<u64, PathBuf>,
     /// Copies to add to the library (id 0).
     pub added: Vec<Book>,
     /// Library books whose file was overwritten (to remove from the library).
@@ -2315,7 +2317,8 @@ impl<'a> Organizer<'a> {
             .unwrap_or_else(|| book.file_path.clone())
     }
 
-    fn record_move(&mut self, id: u64, dest: &Path) {
+    fn record_move(&mut self, id: u64, from: &Path, dest: &Path) {
+        self.result.origins.entry(id).or_insert_with(|| from.to_path_buf());
         self.moved_ids.insert(id, dest.to_path_buf());
         if let Some(e) = self.result.moved.iter_mut().find(|(i, _)| *i == id) {
             e.1 = dest.to_path_buf();
@@ -2385,7 +2388,7 @@ impl<'a> Organizer<'a> {
                         self.current_paths.insert(idx, dest.to_path_buf());
                         if p.mode == Mode::Move {
                             self.push_undo(&p.name, &book.file_path, dest);
-                            self.record_move(book.id, dest);
+                            self.record_move(book.id, &book.file_path, dest);
                         }
                         self.log(act::RENAMED, &name, t!("to: {0}", path_str(dest)));
                     }
@@ -2613,7 +2616,7 @@ impl<'a> Organizer<'a> {
                 self.placed.insert(dest.to_path_buf());
                 self.push_undo(&p.name, src, dest);
                 self.current_paths.insert(idx, dest.to_path_buf());
-                self.record_move(book.id, dest);
+                self.record_move(book.id, src, dest);
             }),
             Mode::Copy => copy_path(src, dest).map(|()| {
                 self.placed.insert(dest.to_path_buf());
@@ -3009,7 +3012,7 @@ impl<'a> Organizer<'a> {
                     self.log(act::FAILED, &name, m);
                 }
                 if let Some(b) = lib_book {
-                    self.record_move(b.id, &dest);
+                    self.record_move(b.id, &e.current, &dest);
                 }
                 self.log(act::RESTORED, &name, t!("to: {0}", path_str(&dest)));
                 Outcome::Success
@@ -3108,6 +3111,15 @@ pub fn run(
     Organizer::new(library, interaction)
         .with_library_folders(library_folders)
         .run(books, profiles, undo_path)
+}
+
+/// The files moved by the last run, where they are now.
+pub fn undo_files(undo_path: &Path) -> Vec<PathBuf> {
+    fs::read_to_string(undo_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<UndoEntry>>(&s).ok())
+        .map(|entries| entries.into_iter().map(|e| e.current).collect())
+        .unwrap_or_default()
 }
 
 /// Moves the files of the last run back to their original location. The

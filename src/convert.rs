@@ -204,9 +204,17 @@ impl ExportSettings {
 #[derive(Clone, Debug)]
 pub struct ExportResult {
     pub source_ids: Vec<u64>,
+    /// The file of the first source book, and its information, as they
+    /// were converted.
+    pub source_path: PathBuf,
+    pub source_info: crate::model::ComicInfo,
     pub new_path: PathBuf,
+    /// The new file's size and dates (read here, off the interface thread).
+    pub new_stats: crate::model::Book,
     /// New metadata of the exported file (page count/pages/tags updated).
     pub info: crate::model::ComicInfo,
+    /// Whether `info` was written into the new file.
+    pub info_embedded: bool,
     /// The library entry must now point to `new_path`.
     pub replace_in_library: bool,
     /// Original files were deleted: remove the source books from the library.
@@ -578,8 +586,12 @@ pub fn export(books: &[Book], s: &ExportSettings, index: usize) -> Result<Export
     }
     Ok(ExportResult {
         source_ids: books.iter().map(|b| b.id).collect(),
+        source_path: first.file_path.clone(),
+        source_info: first.info.clone(),
+        new_stats: crate::model::Book::from_file(dest.clone()),
         new_path: dest,
         info,
+        info_embedded: s.embed_comic_info,
         replace_in_library: replace,
         deleted_sources: s.delete_original && !replace,
         add_to_library: s.add_to_library && !replace && fmt != OutputFormat::ImageFolder,

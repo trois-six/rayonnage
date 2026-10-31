@@ -210,6 +210,22 @@ pub fn run_job<T: Send + 'static>(
     work: impl FnOnce(JobCtx) -> T + Send + 'static,
     done: impl FnOnce(&State, T) + 'static,
 ) {
+    run_job_with(state, kind, books, title, |_| (), move |(), ctx| work(ctx), done);
+}
+
+/// Like `run_job`, with `prepare` run on the GTK thread when the operation
+/// starts, to give `work` its input: an operation that waited for its turn
+/// then works on the books as they are, not as they were when it was asked
+/// for (another operation may have moved their files meanwhile).
+pub fn run_job_with<I: Send + 'static, T: Send + 'static>(
+    state: &State,
+    kind: JobKind,
+    books: Vec<u64>,
+    title: &str,
+    prepare: impl FnOnce(&State) -> I + 'static,
+    work: impl FnOnce(I, JobCtx) -> T + Send + 'static,
+    done: impl FnOnce(&State, T) + 'static,
+) {
     let label = gtk::Label::builder()
         .xalign(0.0)
         .width_chars(30)
@@ -251,7 +267,8 @@ pub fn run_job<T: Send + 'static>(
     let title = title.to_string();
     job.start.replace(Some(Box::new(move || {
         if let (Some(job), Some(st)) = (weak_job.upgrade(), weak.upgrade()) {
-            start(&st, job, title, work, done);
+            let input = prepare(&st);
+            start(&st, job, title, move |ctx| work(input, ctx), done);
         }
     })));
     state.jobs.borrow_mut().push(job.clone());
@@ -280,7 +297,7 @@ fn start<T: Send + 'static>(
 
     std::thread::spawn(move || {
         let r = work(ctx);
-        *slot.lock().unwrap() = Some(r);
+        *slot.lock().expect("job result lock poisoned") = Some(r);
         let _ = tx.send_blocking(JobMsg::Finished);
     });
 
@@ -311,7 +328,7 @@ fn start<T: Send + 'static>(
                     }
                     st.forget_job(&job);
                     update_status(&st);
-                    let r = result.lock().unwrap().take();
+                    let r = result.lock().expect("job result lock poisoned").take();
                     if let (Some(r), Some(done)) = (r, done.take()) {
                         done(&st, r);
                     }
@@ -320,5 +337,12 @@ fn start<T: Send + 'static>(
                 }
             }
         }
+        // The worker stopped without finishing (it panicked): the operation
+        // is removed, so that the ones waiting for it can run.
+        let Some(st) = weak.upgrade() else { return };
+        st.journal.error(&t!("{0}: the operation stopped on an internal error", title.trim_end_matches('…')));
+        st.forget_job(&job);
+        update_status(&st);
+        start_ready(&st);
     });
 }
